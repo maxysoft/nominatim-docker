@@ -43,4 +43,4 @@ The workflow creates tags on both registries when Docker Hub is configured:
    - `DOCKERHUB_USERNAME`: Your Docker Hub username
    - `DOCKERHUB_TOKEN`: Generate from Docker Hub → Account Settings → Security → Access Tokens
 
-The workflow file is located at `.github/workflows/auto-build.yml`.
+The workflow file is located at `.github/workflows/ci.yml` (publish job).
