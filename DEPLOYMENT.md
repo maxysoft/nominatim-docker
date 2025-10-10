@@ -24,8 +24,8 @@ The workflow creates tags on both registries when Docker Hub is configured:
 - `ghcr.io/maxysoft/nominatim-docker:latest` - Always points to the latest master build
 
 **Docker Hub (when secrets are configured):**
-- `maxysoft/nominatim:<commit-sha>` - Specific commit version (e.g., `84b3d22`)
-- `maxysoft/nominatim:latest` - Always points to the latest master build
+- `maxysoft/nominatim-docker:<commit-sha>` - Specific commit version (e.g., `84b3d22`)
+- `maxysoft/nominatim-docker:latest` - Always points to the latest master build
 
 ### Build Process
 

@@ -61,8 +61,8 @@ Docker images are automatically built and pushed to both Docker Hub and GitHub C
 - `ghcr.io/maxysoft/nominatim-docker:latest` - Always points to the latest master build
 
 **Docker Hub (when secrets are configured):**
-- `maxysoft/nominatim:<commit-sha>` - Specific commit version (e.g., `84b3d22`)
-- `maxysoft/nominatim:latest` - Always points to the latest master build
+- `maxysoft/nominatim-docker:<commit-sha>` - Specific commit version (e.g., `84b3d22`)
+- `maxysoft/nominatim-docker:latest` - Always points to the latest master build
 
 This ensures every change is automatically available as a Docker image for testing and deployment, with GitHub Container Registry as the primary fallback when Docker Hub credentials are not available.
 

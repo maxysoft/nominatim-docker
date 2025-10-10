@@ -633,8 +633,8 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            maxysoft/nominatim:${{ steps.get_commit.outputs.SHORT_SHA }}
-            maxysoft/nominatim:latest
+            ${{ github.repository }}:${{ steps.get_commit.outputs.SHORT_SHA }}
+            ${{ github.repository }}:latest
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
