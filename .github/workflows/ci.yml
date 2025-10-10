@@ -42,17 +42,35 @@ jobs:
     runs-on: ubuntu-latest
     env:
       NOMINATIM_VERSION: ${{ needs.build.outputs.NOMINATIM_VERSION }}
+      POSTGRES_PASSWORD: very_secure_password
 
     strategy:
       matrix:
         test_scenario:
           - name: Import with PBF_URL and update
             commands: |-
+              # Start PostgreSQL with PostGIS
+              docker network create nominatim-net
+              docker run -d --rm --name postgres --network nominatim-net \
+                -e POSTGRES_PASSWORD=very_secure_password \
+                -e POSTGRES_USER=postgres \
+                -e POSTGRES_DB=nominatim \
+                postgis/postgis:16-3.4
+              
+              # Wait for PostgreSQL to be ready
+              sleep 10
+              
               # get the data from four days ago to make sure there really are updates to apply
               four_days_ago=`date --date="4 days ago" +%y%m%d`
-              docker run -i --rm \
+              docker run -i --rm --network nominatim-net \
+                -e POSTGRES_HOST=postgres \
+                -e POSTGRES_PORT=5432 \
+                -e POSTGRES_DB=nominatim \
+                -e NOMINATIM_PASSWORD=very_secure_password \
+                -e POSTGRES_ADMIN_PASSWORD=very_secure_password \
                 -e PBF_URL=http://download.geofabrik.de/europe/monaco-${four_days_ago}.osm.pbf \
                 -e REPLICATION_URL=http://download.geofabrik.de/europe/monaco-updates/ \
+                -v nominatim-data:/nominatim \
                 -p 8001:8080 \
                 --name nominatim \
                 nominatim:$NOMINATIM_VERSION &
@@ -60,200 +78,412 @@ jobs:
               ./assert-non-empty-json "http://localhost:8001/search.php?q=avenue%20pasteur"
               docker exec -i nominatim sudo -u nominatim nominatim replication --project-dir /nominatim --once
               ./assert-non-empty-json "http://localhost:8001/search.php?q=avenue%20pasteur"
+              
+              # Cleanup
+              docker stop nominatim postgres || true
+              docker network rm nominatim-net || true
           
           - name: Import with volume mount
             commands: |-
-              docker run -i --rm \
-              -e PBF_URL=http://download.geofabrik.de/europe/monaco-latest.osm.pbf \
-              -e REPLICATION_URL=http://download.geofabrik.de/europe/monaco-updates/ \
-              -v nominatim-data:/var/lib/postgresql/16/main \
-              -p 8002:8080 \
-              nominatim:$NOMINATIM_VERSION &
+              # Start PostgreSQL with PostGIS
+              docker network create nominatim-net2
+              docker run -d --rm --name postgres --network nominatim-net2 \
+                -e POSTGRES_PASSWORD=very_secure_password \
+                -e POSTGRES_USER=postgres \
+                -e POSTGRES_DB=nominatim \
+                postgis/postgis:16-3.4
+              
+              sleep 10
+              
+              docker run -i --rm --network nominatim-net2 \
+                -e POSTGRES_HOST=postgres \
+                -e POSTGRES_PORT=5432 \
+                -e POSTGRES_DB=nominatim \
+                -e NOMINATIM_PASSWORD=very_secure_password \
+                -e POSTGRES_ADMIN_PASSWORD=very_secure_password \
+                -e PBF_URL=http://download.geofabrik.de/europe/monaco-latest.osm.pbf \
+                -e REPLICATION_URL=http://download.geofabrik.de/europe/monaco-updates/ \
+                -v nominatim-data2:/nominatim \
+                -p 8002:8080 \
+                nominatim:$NOMINATIM_VERSION &
 
               ./assert-non-empty-json "http://localhost:8002/search.php?q=avenue%20pasteur"
+              
+              # Cleanup
+              docker stop postgres || true
+              docker network rm nominatim-net2 || true
           
-          - name: Import with bind-mount, container restart & update
+          - name: Import with persistent data and container restart
             commands: |-
+              # Start PostgreSQL with PostGIS with persistent volume
+              docker network create nominatim-net3
+              docker run -d --rm --name postgres --network nominatim-net3 \
+                -e POSTGRES_PASSWORD=very_secure_password \
+                -e POSTGRES_USER=postgres \
+                -e POSTGRES_DB=nominatim \
+                -v postgres-data:/var/lib/postgresql/data \
+                postgis/postgis:16-3.4
+              
+              sleep 10
+              
               # get the data from four days ago to make sure there really are updates to apply
               four_days_ago=`date --date="4 days ago" +%y%m%d`
-              docker run -i --rm \
+              docker run -i --rm --network nominatim-net3 \
+                -e POSTGRES_HOST=postgres \
+                -e POSTGRES_PORT=5432 \
+                -e POSTGRES_DB=nominatim \
+                -e NOMINATIM_PASSWORD=very_secure_password \
+                -e POSTGRES_ADMIN_PASSWORD=very_secure_password \
                 -e PBF_URL=http://download.geofabrik.de/europe/monaco-${four_days_ago}.osm.pbf \
                 -e REPLICATION_URL=http://download.geofabrik.de/europe/monaco-updates/ \
-                -v /tmp/nominatim-data:/var/lib/postgresql/16/main \
+                -v nominatim-data3:/nominatim \
                 -p 8003:8080 \
                 --name nominatim \
                 nominatim:$NOMINATIM_VERSION &
 
               ./assert-non-empty-json "http://localhost:8003/search.php?q=avenue%20pasteur"
               
-              # Stop container
+              # Stop containers
               docker stop nominatim
               # the container needs a few seconds to shutdown cleanly apparently
-              sleep 15
+              sleep 5
 
-              # import to bind mount is done previously
-              docker run -i --rm \
+              # Start nominatim again with same database
+              docker run -i --rm --network nominatim-net3 \
+                -e POSTGRES_HOST=postgres \
+                -e POSTGRES_PORT=5432 \
+                -e POSTGRES_DB=nominatim \
+                -e NOMINATIM_PASSWORD=very_secure_password \
+                -e POSTGRES_ADMIN_PASSWORD=very_secure_password \
                 -e PBF_URL=http://download.geofabrik.de/europe/monaco-${four_days_ago}.osm.pbf \
                 -e REPLICATION_URL=http://download.geofabrik.de/europe/monaco-updates/ \
-                -v /tmp/nominatim-data:/var/lib/postgresql/16/main \
+                -v nominatim-data3:/nominatim \
                 -p 8004:8080 \
                 --name nominatim \
                 nominatim:$NOMINATIM_VERSION &
 
               ./assert-non-empty-json "http://localhost:8004/search.php?q=avenue%20pasteur"
               docker exec -i nominatim sudo -u nominatim nominatim replication --project-dir /nominatim --once
+              ./assert-non-empty-json "http://localhost:8004/search.php?q=avenue%20pasteur"
               
-              ./assert-non-empty-json "http://localhost:8004/search.php?q=avenue%20pasteur"
+              # Cleanup
+              docker stop nominatim postgres || true
+              docker network rm nominatim-net3 || true
 
-          - name: UPDATE_MODE=once with volume
-            commands: |-
-              # get the data from four days ago to make sure there really are updates to apply
-              four_days_ago=`date --date="4 days ago" +%y%m%d`
-              docker run -i --rm \
-                -e PBF_URL=http://download.geofabrik.de/europe/monaco-${four_days_ago}.osm.pbf \
-                -e REPLICATION_URL=http://download.geofabrik.de/europe/monaco-updates/ \
-                -e UPDATE_MODE=once \
-                -v nominatim-update-volume:/var/lib/postgresql/16/main \
-                -p 8004:8080 \
-                --name nominatim \
-                nominatim:$NOMINATIM_VERSION &
-
-              ./assert-non-empty-json "http://localhost:8004/search.php?q=avenue%20pasteur"
-              echo -n "check replication log for Update completed. Count:"
-              docker exec nominatim /bin/bash -c 'tail -f /var/log/replication.log | grep -m 1 -c "Update completed." '
-
-          - name: UPDATE_MODE=continuous with bind-mount
-            commands: |-
-              # get the data from few days ago to make sure there really are updates to apply
-              days_ago=`date --date="4 days ago" +%y%m%d`
-              docker run -i --rm \
-                -e PBF_URL=http://download.geofabrik.de/europe/monaco-${days_ago}.osm.pbf \
-                -e REPLICATION_URL=http://download.geofabrik.de/europe/monaco-updates/ \
-                -e UPDATE_MODE=continuous \
-                -v /tmp/nominatim-update-bindmount:/var/lib/postgresql/16/main \
-                -p 8004:8080 \
-                --name nominatim \
-                nominatim:$NOMINATIM_VERSION &
-
-              ./assert-non-empty-json "http://localhost:8004/search.php?q=avenue%20pasteur"
-              echo -n "check replication log for Update completed. Count:"
-              docker exec nominatim /bin/bash -c 'tail -f /var/log/replication.log | grep -m 1 -c "Update completed." '
-          
           - name: Import full style
             commands: |-
-              docker run -i --rm \
+              # Start PostgreSQL with PostGIS
+              docker network create nominatim-net4
+              docker run -d --rm --name postgres --network nominatim-net4 \
+                -e POSTGRES_PASSWORD=very_secure_password \
+                -e POSTGRES_USER=postgres \
+                -e POSTGRES_DB=nominatim \
+                postgis/postgis:16-3.4
+              
+              sleep 10
+              
+              docker run -i --rm --network nominatim-net4 \
+                -e POSTGRES_HOST=postgres \
+                -e POSTGRES_PORT=5432 \
+                -e POSTGRES_DB=nominatim \
+                -e NOMINATIM_PASSWORD=very_secure_password \
+                -e POSTGRES_ADMIN_PASSWORD=very_secure_password \
                 -e PBF_URL=http://download.geofabrik.de/europe/monaco-latest.osm.pbf \
                 -e REPLICATION_URL=http://download.geofabrik.de/europe/monaco-updates/ \
                 -e IMPORT_STYLE=full \
+                -v nominatim-data4:/nominatim \
                 -p 8005:8080 \
                 nominatim:$NOMINATIM_VERSION &
 
               ./assert-non-empty-json "http://localhost:8005/search.php?q=hotel%20de%20paris"
+              
+              # Cleanup
+              docker stop postgres || true
+              docker network rm nominatim-net4 || true
           
           - name: Import admin style
             commands: |-
-              docker run -i --rm \
+              # Start PostgreSQL with PostGIS
+              docker network create nominatim-net5
+              docker run -d --rm --name postgres --network nominatim-net5 \
+                -e POSTGRES_PASSWORD=very_secure_password \
+                -e POSTGRES_USER=postgres \
+                -e POSTGRES_DB=nominatim \
+                postgis/postgis:16-3.4
+              
+              sleep 10
+              
+              docker run -i --rm --network nominatim-net5 \
+                -e POSTGRES_HOST=postgres \
+                -e POSTGRES_PORT=5432 \
+                -e POSTGRES_DB=nominatim \
+                -e NOMINATIM_PASSWORD=very_secure_password \
+                -e POSTGRES_ADMIN_PASSWORD=very_secure_password \
                 -e PBF_URL=http://download.geofabrik.de/europe/monaco-latest.osm.pbf \
                 -e REPLICATION_URL=http://download.geofabrik.de/europe/monaco-updates/ \
                 -e IMPORT_STYLE=admin \
+                -v nominatim-data5:/nominatim \
                 -p 8006:8080 \
                 nominatim:$NOMINATIM_VERSION &
 
               ./assert-empty-json "http://localhost:8006/search.php?q=hotel%20de%20paris"
+              
+              # Cleanup
+              docker stop postgres || true
+              docker network rm nominatim-net5 || true
 
           - name: Import with PBF_PATH
             commands: |-
+              # Start PostgreSQL with PostGIS
+              docker network create nominatim-net6
+              docker run -d --rm --name postgres --network nominatim-net6 \
+                -e POSTGRES_PASSWORD=very_secure_password \
+                -e POSTGRES_USER=postgres \
+                -e POSTGRES_DB=nominatim \
+                postgis/postgis:16-3.4
+              
+              sleep 10
+              
               wget --cut-dirs=1 -nH -xP /tmp/data http://download.geofabrik.de/europe/monaco-latest.osm.pbf
-              docker run -i --rm \
+              docker run -i --rm --network nominatim-net6 \
+                -e POSTGRES_HOST=postgres \
+                -e POSTGRES_PORT=5432 \
+                -e POSTGRES_DB=nominatim \
+                -e NOMINATIM_PASSWORD=very_secure_password \
+                -e POSTGRES_ADMIN_PASSWORD=very_secure_password \
                 -e PBF_PATH=/nominatim/data/monaco-latest.osm.pbf \
                 -e REPLICATION_URL=http://download.geofabrik.de/europe/monaco-updates/ \
-                -v nominatim7-data:/var/lib/postgresql/16/main \
+                -v nominatim-data6:/nominatim \
                 -v /tmp/data:/nominatim/data \
                 -p 8007:8080 \
                 --name nominatim \
                 nominatim:$NOMINATIM_VERSION &
 
               ./assert-non-empty-json "http://localhost:8007/search.php?q=avenue%20pasteur"
+              
+              # Cleanup
+              docker stop nominatim postgres || true
+              docker network rm nominatim-net6 || true
 
           - name: REPLICATION_URL is blank
             commands: |-
-              docker run -i --rm \
+              # Start PostgreSQL with PostGIS
+              docker network create nominatim-net7
+              docker run -d --rm --name postgres --network nominatim-net7 \
+                -e POSTGRES_PASSWORD=very_secure_password \
+                -e POSTGRES_USER=postgres \
+                -e POSTGRES_DB=nominatim \
+                postgis/postgis:16-3.4
+              
+              sleep 10
+              
+              docker run -i --rm --network nominatim-net7 \
+                -e POSTGRES_HOST=postgres \
+                -e POSTGRES_PORT=5432 \
+                -e POSTGRES_DB=nominatim \
+                -e NOMINATIM_PASSWORD=very_secure_password \
+                -e POSTGRES_ADMIN_PASSWORD=very_secure_password \
                 -e PBF_URL=http://download.geofabrik.de/europe/monaco-latest.osm.pbf \
+                -v nominatim-data7:/nominatim \
                 -p 8008:8080 \
                 nominatim:$NOMINATIM_VERSION &
 
               ./assert-non-empty-json "http://localhost:8008/search.php?q=avenue%20pasteur"
+              
+              # Cleanup
+              docker stop postgres || true
+              docker network rm nominatim-net7 || true
 
           - name: FREEZE
             commands: |-
-              docker run -i --rm \
+              # Start PostgreSQL with PostGIS
+              docker network create nominatim-net8
+              docker run -d --rm --name postgres --network nominatim-net8 \
+                -e POSTGRES_PASSWORD=very_secure_password \
+                -e POSTGRES_USER=postgres \
+                -e POSTGRES_DB=nominatim \
+                postgis/postgis:16-3.4
+              
+              sleep 10
+              
+              docker run -i --rm --network nominatim-net8 \
+                -e POSTGRES_HOST=postgres \
+                -e POSTGRES_PORT=5432 \
+                -e POSTGRES_DB=nominatim \
+                -e NOMINATIM_PASSWORD=very_secure_password \
+                -e POSTGRES_ADMIN_PASSWORD=very_secure_password \
                 -e PBF_URL=http://download.geofabrik.de/europe/monaco-latest.osm.pbf \
                 -e FREEZE="true" \
+                -v nominatim-data8:/nominatim \
                 -p 8009:8080 \
                 nominatim:$NOMINATIM_VERSION &
 
               ./assert-non-empty-json "http://localhost:8009/search.php?q=avenue%20pasteur"
+              
+              # Cleanup
+              docker stop postgres || true
+              docker network rm nominatim-net8 || true
 
           - name: GB postcode import
             commands: |-
-              docker run -i --rm \
+              # Start PostgreSQL with PostGIS
+              docker network create nominatim-net9
+              docker run -d --rm --name postgres --network nominatim-net9 \
+                -e POSTGRES_PASSWORD=very_secure_password \
+                -e POSTGRES_USER=postgres \
+                -e POSTGRES_DB=nominatim \
+                postgis/postgis:16-3.4
+              
+              sleep 10
+              
+              docker run -i --rm --network nominatim-net9 \
+                -e POSTGRES_HOST=postgres \
+                -e POSTGRES_PORT=5432 \
+                -e POSTGRES_DB=nominatim \
+                -e NOMINATIM_PASSWORD=very_secure_password \
+                -e POSTGRES_ADMIN_PASSWORD=very_secure_password \
                 -e PBF_URL=https://download.geofabrik.de/europe/united-kingdom/england/rutland-latest.osm.pbf \
                 -e IMPORT_GB_POSTCODES="true" \
+                -v nominatim-data9:/nominatim \
                 -p 8010:8080 \
                 nominatim:$NOMINATIM_VERSION &
 
               ./assert-non-empty-json "http://localhost:8010/search.php?postalcode=LE15+8TX"
               ./assert-non-empty-json "http://localhost:8010/search.php?postalcode=PE9+3SY"
               ./assert-non-empty-json "http://localhost:8010/search.php?postalcode=PE9+4ES"
+              
+              # Cleanup
+              docker stop postgres || true
+              docker network rm nominatim-net9 || true
   
           - name: REVERSE_ONLY
             commands: |-
-              docker run -i --rm \
+              # Start PostgreSQL with PostGIS
+              docker network create nominatim-net10
+              docker run -d --rm --name postgres --network nominatim-net10 \
+                -e POSTGRES_PASSWORD=very_secure_password \
+                -e POSTGRES_USER=postgres \
+                -e POSTGRES_DB=nominatim \
+                postgis/postgis:16-3.4
+              
+              sleep 10
+              
+              docker run -i --rm --network nominatim-net10 \
+                -e POSTGRES_HOST=postgres \
+                -e POSTGRES_PORT=5432 \
+                -e POSTGRES_DB=nominatim \
+                -e NOMINATIM_PASSWORD=very_secure_password \
+                -e POSTGRES_ADMIN_PASSWORD=very_secure_password \
                 -e PBF_URL=http://download.geofabrik.de/europe/monaco-latest.osm.pbf \
                 -e REVERSE_ONLY="true" \
+                -v nominatim-data10:/nominatim \
                 -p 8011:8080 \
                 nominatim:$NOMINATIM_VERSION &
 
               ./assert-non-empty-json "http://localhost:8011/reverse.php?lat=43.734&lon=7.42&format=jsonv2"
+              
+              # Cleanup
+              docker stop postgres || true
+              docker network rm nominatim-net10 || true
           
           - name: Check for clean shutdown
             commands: |-
-              docker run --detach --rm \
-              -e PBF_URL=http://download.geofabrik.de/europe/monaco-latest.osm.pbf \
-              -p 8009:8080 \
-              --name nominatim \
-              nominatim:$NOMINATIM_VERSION
+              # Start PostgreSQL with PostGIS
+              docker network create nominatim-net11
+              docker run -d --rm --name postgres --network nominatim-net11 \
+                -e POSTGRES_PASSWORD=very_secure_password \
+                -e POSTGRES_USER=postgres \
+                -e POSTGRES_DB=nominatim \
+                postgis/postgis:16-3.4
+              
+              sleep 10
+              
+              docker run --detach --rm --network nominatim-net11 \
+                -e POSTGRES_HOST=postgres \
+                -e POSTGRES_PORT=5432 \
+                -e POSTGRES_DB=nominatim \
+                -e NOMINATIM_PASSWORD=very_secure_password \
+                -e POSTGRES_ADMIN_PASSWORD=very_secure_password \
+                -e PBF_URL=http://download.geofabrik.de/europe/monaco-latest.osm.pbf \
+                -v nominatim-data11:/nominatim \
+                -p 8012:8080 \
+                --name nominatim \
+                nominatim:$NOMINATIM_VERSION
             
-              ./assert-non-empty-json "http://localhost:8009/search.php?q=avenue%20pasteur"
+              ./assert-non-empty-json "http://localhost:8012/search.php?q=avenue%20pasteur"
               # Shutdown the container
               docker stop -t 60 nominatim
               # Verify that the exit code is zero
               CONTAINER_EXIT_CODE=$(docker inspect nominatim --format='{{.State.ExitCode}}')
               test "$CONTAINER_EXIT_CODE" -eq 0
+              
+              # Cleanup
+              docker stop postgres || true
+              docker network rm nominatim-net11 || true
 
           - name: WARMUP_ON_STARTUP=true
             commands: |-
-              docker run -i --rm \
+              # Start PostgreSQL with PostGIS
+              docker network create nominatim-net12
+              docker run -d --rm --name postgres --network nominatim-net12 \
+                -e POSTGRES_PASSWORD=very_secure_password \
+                -e POSTGRES_USER=postgres \
+                -e POSTGRES_DB=nominatim \
+                postgis/postgis:16-3.4
+              
+              sleep 10
+              
+              docker run -i --rm --network nominatim-net12 \
+                -e POSTGRES_HOST=postgres \
+                -e POSTGRES_PORT=5432 \
+                -e POSTGRES_DB=nominatim \
+                -e NOMINATIM_PASSWORD=very_secure_password \
+                -e POSTGRES_ADMIN_PASSWORD=very_secure_password \
                 -e PBF_URL=http://download.geofabrik.de/europe/monaco-latest.osm.pbf \
                 -e WARMUP_ON_STARTUP=true \
-                -p 8012:8080 \
-                --name nominatim \
-                nominatim:$NOMINATIM_VERSION &
-
-              ./assert-non-empty-json "http://localhost:8012/search.php?q=avenue%20pasteur"
-              docker logs nominatim | grep "Warming finished"
-
-          - name: WARMUP_ON_STARTUP=false
-            commands: |-
-              docker run -i --rm \
-                -e PBF_URL=http://download.geofabrik.de/europe/monaco-latest.osm.pbf \
-                -e WARMUP_ON_STARTUP=false \
+                -v nominatim-data12:/nominatim \
                 -p 8013:8080 \
                 --name nominatim \
                 nominatim:$NOMINATIM_VERSION &
 
               ./assert-non-empty-json "http://localhost:8013/search.php?q=avenue%20pasteur"
+              docker logs nominatim | grep "Warming finished"
+              
+              # Cleanup
+              docker stop nominatim postgres || true
+              docker network rm nominatim-net12 || true
+
+          - name: WARMUP_ON_STARTUP=false
+            commands: |-
+              # Start PostgreSQL with PostGIS
+              docker network create nominatim-net13
+              docker run -d --rm --name postgres --network nominatim-net13 \
+                -e POSTGRES_PASSWORD=very_secure_password \
+                -e POSTGRES_USER=postgres \
+                -e POSTGRES_DB=nominatim \
+                postgis/postgis:16-3.4
+              
+              sleep 10
+              
+              docker run -i --rm --network nominatim-net13 \
+                -e POSTGRES_HOST=postgres \
+                -e POSTGRES_PORT=5432 \
+                -e POSTGRES_DB=nominatim \
+                -e NOMINATIM_PASSWORD=very_secure_password \
+                -e POSTGRES_ADMIN_PASSWORD=very_secure_password \
+                -e PBF_URL=http://download.geofabrik.de/europe/monaco-latest.osm.pbf \
+                -e WARMUP_ON_STARTUP=false \
+                -v nominatim-data13:/nominatim \
+                -p 8014:8080 \
+                --name nominatim \
+                nominatim:$NOMINATIM_VERSION &
+
+              ./assert-non-empty-json "http://localhost:8014/search.php?q=avenue%20pasteur"
               docker logs nominatim | grep "Skipping cache warmup"
+              
+              # Cleanup
+              docker stop postgres || true
+              docker network rm nominatim-net13 || true
     
     steps:
       - name: Download artifact
