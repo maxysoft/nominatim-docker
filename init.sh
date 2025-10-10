@@ -66,23 +66,44 @@ if [ "$PBF_PATH" != "" ]; then
 fi
 
 
-# if we use a bind mount then the PG directory is empty and we have to create it
-if [ ! -f /var/lib/postgresql/16/main/PG_VERSION ]; then
-  chown postgres:postgres /var/lib/postgresql/16/main
-  sudo -u postgres /usr/lib/postgresql/16/bin/initdb -D /var/lib/postgresql/16/main
+# Set default postgres admin password if not provided
+if [ -z "$POSTGRES_ADMIN_PASSWORD" ]; then
+    POSTGRES_ADMIN_PASSWORD="$NOMINATIM_PASSWORD"
 fi
 
-# temporarily enable unsafe import optimization config
-cp /etc/postgresql/16/main/conf.d/postgres-import.conf.disabled /etc/postgresql/16/main/conf.d/postgres-import.conf
+# Wait for external PostgreSQL to be ready
+echo "Waiting for PostgreSQL at ${POSTGRES_HOST}:${POSTGRES_PORT} to be ready..."
+until PGPASSWORD="${POSTGRES_ADMIN_PASSWORD}" psql -h "${POSTGRES_HOST}" -p "${POSTGRES_PORT}" -U "postgres" -d "postgres" -c '\q' 2>/dev/null; do
+  echo "PostgreSQL is unavailable - sleeping"
+  sleep 2
+done
+echo "PostgreSQL is ready"
 
-sudo service postgresql start && \
-sudo -E -u postgres psql postgres -tAc "SELECT 1 FROM pg_roles WHERE rolname='nominatim'" | grep -q 1 || sudo -E -u postgres createuser -s nominatim && \
-sudo -E -u postgres psql postgres -tAc "SELECT 1 FROM pg_roles WHERE rolname='www-data'" | grep -q 1 || sudo -E -u postgres createuser -SDR www-data && \
+# Check and create database and users if needed
+echo "Creating database users..."
+PGPASSWORD="${POSTGRES_ADMIN_PASSWORD}" psql -h "${POSTGRES_HOST}" -p "${POSTGRES_PORT}" -U "postgres" -d "postgres" -tAc "SELECT 1 FROM pg_roles WHERE rolname='nominatim'" | grep -q 1 || {
+  echo "Creating nominatim user..."
+  PGPASSWORD="${POSTGRES_ADMIN_PASSWORD}" psql -h "${POSTGRES_HOST}" -p "${POSTGRES_PORT}" -U "postgres" -d "postgres" -c "CREATE USER nominatim SUPERUSER;"
+}
 
-sudo -E -u postgres psql postgres -tAc "ALTER USER nominatim WITH ENCRYPTED PASSWORD '$NOMINATIM_PASSWORD'" && \
-sudo -E -u postgres psql postgres -tAc "ALTER USER \"www-data\" WITH ENCRYPTED PASSWORD '${NOMINATIM_PASSWORD}'" && \
+PGPASSWORD="${POSTGRES_ADMIN_PASSWORD}" psql -h "${POSTGRES_HOST}" -p "${POSTGRES_PORT}" -U "postgres" -d "postgres" -tAc "SELECT 1 FROM pg_roles WHERE rolname='www-data'" | grep -q 1 || {
+  echo "Creating www-data user..."
+  PGPASSWORD="${POSTGRES_ADMIN_PASSWORD}" psql -h "${POSTGRES_HOST}" -p "${POSTGRES_PORT}" -U "postgres" -d "postgres" -c "CREATE USER \"www-data\";"
+}
 
-sudo -E -u postgres psql postgres -c "DROP DATABASE IF EXISTS nominatim"
+echo "Setting user passwords..."
+PGPASSWORD="${POSTGRES_ADMIN_PASSWORD}" psql -h "${POSTGRES_HOST}" -p "${POSTGRES_PORT}" -U "postgres" -d "postgres" -c "ALTER USER nominatim WITH ENCRYPTED PASSWORD '${NOMINATIM_PASSWORD}';"
+PGPASSWORD="${POSTGRES_ADMIN_PASSWORD}" psql -h "${POSTGRES_HOST}" -p "${POSTGRES_PORT}" -U "postgres" -d "postgres" -c "ALTER USER \"www-data\" WITH ENCRYPTED PASSWORD '${NOMINATIM_PASSWORD}';"
+
+# Drop and recreate database
+echo "Recreating database..."
+PGPASSWORD="${POSTGRES_ADMIN_PASSWORD}" psql -h "${POSTGRES_HOST}" -p "${POSTGRES_PORT}" -U "postgres" -d "postgres" -c "DROP DATABASE IF EXISTS ${POSTGRES_DB};"
+PGPASSWORD="${POSTGRES_ADMIN_PASSWORD}" psql -h "${POSTGRES_HOST}" -p "${POSTGRES_PORT}" -U "postgres" -d "postgres" -c "CREATE DATABASE ${POSTGRES_DB} OWNER nominatim;"
+
+# Enable PostGIS extension
+echo "Enabling PostGIS extension..."
+PGPASSWORD="${NOMINATIM_PASSWORD}" psql -h "${POSTGRES_HOST}" -p "${POSTGRES_PORT}" -U "nominatim" -d "${POSTGRES_DB}" -c "CREATE EXTENSION IF NOT EXISTS postgis;"
+PGPASSWORD="${NOMINATIM_PASSWORD}" psql -h "${POSTGRES_HOST}" -p "${POSTGRES_PORT}" -U "nominatim" -d "${POSTGRES_DB}" -c "CREATE EXTENSION IF NOT EXISTS hstore;"
 
 chown -R nominatim:nominatim ${PROJECT_DIR}
 
@@ -131,12 +152,7 @@ export NOMINATIM_REQUEST_TIMEOUT=60
 # gather statistics for query planner to potentially improve query performance
 # see, https://github.com/osm-search/Nominatim/issues/1023
 # and  https://github.com/osm-search/Nominatim/issues/1139
-sudo -E -u nominatim psql -d nominatim -c "ANALYZE VERBOSE"
-
-sudo service postgresql stop
-
-# Remove slightly unsafe postgres config overrides that made the import faster
-rm /etc/postgresql/16/main/conf.d/postgres-import.conf
+sudo -E -u nominatim PGPASSWORD="${NOMINATIM_PASSWORD}" psql -h "${POSTGRES_HOST}" -p "${POSTGRES_PORT}" -d "${POSTGRES_DB}" -c "ANALYZE VERBOSE"
 
 echo "Deleting downloaded dumps in ${PROJECT_DIR}"
 rm -f ${PROJECT_DIR}/*sql.gz

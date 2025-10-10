@@ -1,5 +1,7 @@
 # Nominatim Docker (Nominatim version 5.1)
 
+> **Note:** This version has been modified to use external PostgreSQL/PostGIS instead of running PostgreSQL inside the container. For setup instructions with external database, see [external-postgis.md](external-postgis.md).
+
 ## Table of contents
 
   - [Automatic import](#automatic-import)
@@ -70,22 +72,19 @@ The following run parameters are available for configuration:
 
 - `shm-size`: Size of the tmpfs in Docker, for bigger imports (e.g. Europe) this needs to be set to at least 1GB or more. Half the size of your available RAM is recommended. (default: `64M`)
 
-### PostgreSQL Tuning
+### External Database Configuration
 
-The following environment variables are available to tune PostgreSQL:
+This version requires an external PostgreSQL database with PostGIS extension. The following environment variables are used to configure the database connection:
 
-- `POSTGRES_SHARED_BUFFERS` (default: `2GB`)
-- `POSTGRES_MAINTENANCE_WORK_MEM` (default: `10GB`)
-- `POSTGRES_AUTOVACUUM_WORK_MEM` (default: `2GB`)
-- `POSTGRES_WORK_MEM` (default: `50MB`)
-- `POSTGRES_EFFECTIVE_CACHE_SIZE` (default: `24GB`)
-- `POSTGRES_SYNCHRONOUS_COMMIT` (default: `off`)
-- `POSTGRES_MAX_WAL_SIZE` (default: `1GB`)
-- `POSTGRES_CHECKPOINT_TIMEOUT` (default: `10min`)
-- `POSTGRES_CHECKPOINT_COMPLETION_TARGET` (default: `0.9`)
-- `POSTGRES_MAX_CONNECTIONS` (default: `100`)
+- `POSTGRES_HOST` (default: `postgres`): Hostname or IP of the PostgreSQL server
+- `POSTGRES_PORT` (default: `5432`): Port number of the PostgreSQL server
+- `POSTGRES_DB` (default: `nominatim`): Name of the database to use
+- `NOMINATIM_PASSWORD`: Password for the Nominatim database users
+- `POSTGRES_ADMIN_PASSWORD` (default: same as `NOMINATIM_PASSWORD`): Password for the PostgreSQL admin user
 
-See https://nominatim.org/release-docs/5.1/admin/Installation/#tuning-the-postgresql-database for more details on those settings.
+For PostgreSQL tuning, configure your external PostgreSQL server according to the [official Nominatim documentation](https://nominatim.org/release-docs/5.1/admin/Installation/#tuning-the-postgresql-database). 
+
+See [external-postgis.md](external-postgis.md) for complete setup instructions and Docker Compose examples.
 
 ### Import Style
 
@@ -124,12 +123,12 @@ Here you can find a [configuration example](example.md) for all flags you can us
 
 ## Persistent container data
 
-If you want to keep your imported data across deletion and recreation of your container, make the following folder a volume:
+When using external PostgreSQL (recommended), data persistence is handled by your external database server. For the Nominatim container, you only need to persist:
 
-- `/var/lib/postgresql/16/main` is the storage location of the Postgres database & holds the state about whether the import was successful
-- `/nominatim/flatnode` is the storage location of the flatnode file.
+- `/nominatim` is the storage location of the Nominatim project data and holds the state about whether the import was successful
+- `/nominatim/flatnode` is the storage location of the flatnode file (if used).
 
-So if you want to be able to kill your container and start it up again with all the data still present use the following command:
+So if you want to be able to kill your container and start it up again with all the data still present use the following command with external PostgreSQL:
 
 ```sh
 docker run -it --shm-size=1g \
@@ -137,7 +136,9 @@ docker run -it --shm-size=1g \
   -e REPLICATION_URL=https://download.geofabrik.de/europe/monaco-updates/ \
   -e IMPORT_WIKIPEDIA=false \
   -e NOMINATIM_PASSWORD=very_secure_password \
-  -v nominatim-data:/var/lib/postgresql/16/main \
+  -e POSTGRES_HOST=your_postgres_host \
+  -e POSTGRES_ADMIN_PASSWORD=your_postgres_password \
+  -v nominatim-data:/nominatim \
   -p 8080:8080 \
   --name nominatim \
   mediagis/nominatim:5.1
@@ -239,11 +240,18 @@ In addition, we also provide a basic `contrib/docker-compose.yml` template which
 Besides the basic docker-compose.yml, there are also some advanced YAML configurations available in the `contrib` folder.
 These files follow the naming convention of `docker-compose-*.yml` and contain comments about the specific use case.
 
+## External PostGIS Database Usage
+
+This version now requires an external PostgreSQL/PostGIS database. See the [External PostGIS Documentation](external-postgis.md) for complete setup instructions.
+
+## Docker Compose Examples
+
+For examples of using this version with external PostgreSQL:
+- [Docker Compose with external PostgreSQL](contrib/docker-compose-external-db.yml)
+
 ## Assorted use cases documented in issues
 
-- [Using an external Postgres database](https://github.com/mediagis/nominatim-docker/issues/245#issuecomment-1072205751)
-  - [Using Amazon's RDS](https://github.com/mediagis/nominatim-docker/issues/378#issuecomment-1278653770)
 - [Hardware sizing for importing the entire planet](https://github.com/mediagis/nominatim-docker/discussions/265)
-- [Upgrading Nominatim](https://github.com/mediagis/nominatim-docker/discussions/317)
+- [Upgrading Nominatim](https://github.com/mediagis/nominatim-docker/discussions/317) 
 - [Using Nominatim UI](https://github.com/mediagis/nominatim-docker/discussions/486#discussioncomment-7239861)
 

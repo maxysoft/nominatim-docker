@@ -7,14 +7,17 @@ GUNICORN_PID_FILE=/tmp/gunicorn.pid
 export PYTHONUNBUFFERED=1
 
 stopServices() {
-  service postgresql stop
   # Check if the replication process is active
   if [ $replicationpid -ne 0 ]; then
     echo "Shutting down replication process"
     kill $replicationpid
   fi
-  kill $tailpid
-  cat $GUNICORN_PID_FILE | sudo xargs kill
+  if [ $tailpid -ne 0 ]; then
+    kill $tailpid
+  fi
+  if [ -f $GUNICORN_PID_FILE ]; then
+    cat $GUNICORN_PID_FILE | sudo xargs kill
+  fi
 
   # Force exit code 0 to signal a successful shutdown to Docker
   exit 0
@@ -29,7 +32,7 @@ else
   useradd -m -p ${NOMINATIM_PASSWORD} nominatim
 fi
 
-IMPORT_FINISHED=/var/lib/postgresql/16/main/import-finished
+IMPORT_FINISHED=${PROJECT_DIR}/import-finished
 
 if [ ! -f ${IMPORT_FINISHED} ]; then
   /app/init.sh
@@ -38,7 +41,13 @@ else
   chown -R nominatim:nominatim ${PROJECT_DIR}
 fi
 
-service postgresql start
+# Wait for external PostgreSQL to be ready
+echo "Waiting for PostgreSQL at ${POSTGRES_HOST}:${POSTGRES_PORT} to be ready..."
+until PGPASSWORD="${NOMINATIM_PASSWORD}" psql -h "${POSTGRES_HOST}" -p "${POSTGRES_PORT}" -U "nominatim" -d "${POSTGRES_DB}" -c '\q' 2>/dev/null; do
+  echo "PostgreSQL is unavailable - sleeping"
+  sleep 2
+done
+echo "PostgreSQL is ready"
 
 cd ${PROJECT_DIR} && sudo -E -u nominatim nominatim refresh --website --functions
 
@@ -63,9 +72,8 @@ if [ "$REPLICATION_URL" != "" ] && [ "$FREEZE" != "true" ]; then
   fi
 fi
 
-# fork a process and wait for it
-tail -Fv /var/log/postgresql/postgresql-16-main.log &
-tailpid=${!}
+# No local PostgreSQL logs to tail since we're using external DB
+tailpid=0
 
 if [ "$WARMUP_ON_STARTUP" = "true" ]; then
   export NOMINATIM_QUERY_TIMEOUT=600

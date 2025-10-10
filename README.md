@@ -2,21 +2,22 @@
 
 100% working container for [Nominatim](https://github.com/openstreetmap/Nominatim).
 
+> **⚠️ Important:** This version requires an external PostgreSQL database with PostGIS. See [external-postgis.md](external-postgis.md) for setup instructions.
+
 ![Nominatim Version](https://img.shields.io/badge/Nominatim%20Version-5.1.0-blue?style=flat-square) ![GitHub Workflow Status](https://img.shields.io/github/actions/workflow/status/mediagis/nominatim-docker/ci.yml?branch=master&style=flat-square) ![Github All Contributors](https://img.shields.io/github/all-contributors/mediagis/nominatim-docker?style=flat-square) ![Docker Pulls](https://img.shields.io/docker/pulls/mediagis/nominatim?style=flat-square) ![Docker Image Size with architecture (latest by date/latest semver)](https://img.shields.io/docker/image-size/mediagis/nominatim?style=flat-square)
 
 ## Quick Start
 
 The easiest way to use Nominatim Docker is by pulling the pre-built images from [Docker Hub](https://hub.docker.com/r/mediagis/nominatim).
 
-To quickly get a Nominatim instance up and running with a small dataset (e.g., Monaco):
+To quickly get a Nominatim instance up and running with a small dataset (e.g., Monaco), use Docker Compose with an external PostgreSQL database:
 
 ```sh
-docker run -it \
-  -e PBF_URL=https://download.geofabrik.de/europe/monaco-latest.osm.pbf \
-  -p 8080:8080 \
-  --name nominatim \
-  mediagis/nominatim:5.1
+# Use the provided docker-compose configuration
+docker compose -f contrib/docker-compose-external-db.yml up
 ```
+
+Or see [external-postgis.md](external-postgis.md) for complete setup instructions with custom configurations.
 
 After the import is complete, you can access the Nominatim API at `http://localhost:8080/search.php?q=avenue%20pasteur`.
 
@@ -40,11 +41,16 @@ For comprehensive instructions on advanced configuration, importing custom PBF f
 
 # Project goals and alternatives
 
-It is the goal of this project to provide and easy to use container image that runs all services in a single container.
-The downside is that this makes the Dockerfile quite complex and harder to modify.
+This project has been modified to provide better separation of concerns by using an external PostgreSQL/PostGIS database instead of running PostgreSQL inside the Nominatim container. This approach offers several advantages:
 
-If you're looking for a project which separates the individual concepts into separate containers, check out
-https://github.com/smithmicro/n7m.
+- Better resource management and scalability
+- Easier database maintenance and backups  
+- Ability to use managed database services (AWS RDS, Google Cloud SQL, etc.)
+- Simplified container deployment and updates
+
+The trade-off is slightly more complex setup, but with better operational characteristics for production use.
+
+If you're looking for other projects with different architectures, check out https://github.com/smithmicro/n7m.
 
 # Contributors
 
