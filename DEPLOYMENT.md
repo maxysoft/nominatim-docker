@@ -6,7 +6,7 @@ This repository includes a GitHub Actions workflow that automatically builds and
 
 ### Setup Requirements
 
-The workflow automatically pushes to **GitHub Container Registry** using the built-in `GITHUB_TOKEN` (no additional configuration needed).
+The workflow automatically pushes to **GitHub Container Registry** using the built-in `GITHUB_TOKEN` with `packages: write` permission (no additional configuration needed).
 
 To also enable **Docker Hub** publishing, the repository maintainer can optionally configure these secrets:
 
@@ -32,8 +32,9 @@ The workflow creates tags on both registries when Docker Hub is configured:
 1. Triggered on push to master branch
 2. Extracts commit short SHA (first 7 characters)
 3. Builds Docker image for `linux/amd64` and `linux/arm64` platforms
-4. Pushes to Docker Hub with appropriate tags
-5. Includes OCI labels for traceability
+4. Pushes to GitHub Container Registry (always)
+5. Pushes to Docker Hub with appropriate tags (when secrets are configured)
+6. Includes OCI labels for traceability
 
 ### Manual Setup Instructions
 
