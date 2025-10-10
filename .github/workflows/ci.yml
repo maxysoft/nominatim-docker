@@ -472,7 +472,7 @@ jobs:
               
               sleep 10
               
-              docker run --detach --rm --network nominatim-net11 \
+              docker run --detach --network nominatim-net11 \
                 -e POSTGRES_HOST=postgres \
                 -e POSTGRES_PORT=5432 \
                 -e POSTGRES_DB=nominatim \
@@ -492,6 +492,7 @@ jobs:
               test "$CONTAINER_EXIT_CODE" -eq 0
               
               # Cleanup
+              docker rm nominatim || true
               docker stop postgres || true
               docker network rm nominatim-net11 || true
 
