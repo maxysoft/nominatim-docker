@@ -170,6 +170,80 @@ jobs:
               docker stop nominatim postgres || true
               docker network rm nominatim-net3 || true
 
+          - name: UPDATE_MODE=once
+            commands: |-
+              # Start PostgreSQL with PostGIS
+              docker network create nominatim-net-update1
+              docker run -d --rm --name postgres --network nominatim-net-update1 \
+                -e POSTGRES_PASSWORD=very_secure_password \
+                -e POSTGRES_USER=postgres \
+                -e POSTGRES_DB=nominatim \
+                -v postgres-data-update1:/var/lib/postgresql/data \
+                postgis/postgis:16-3.4
+              
+              sleep 10
+              
+              # get the data from four days ago to make sure there really are updates to apply
+              four_days_ago=`date --date="4 days ago" +%y%m%d`
+              docker run -i --rm --network nominatim-net-update1 \
+                -e POSTGRES_HOST=postgres \
+                -e POSTGRES_PORT=5432 \
+                -e POSTGRES_DB=nominatim \
+                -e NOMINATIM_PASSWORD=very_secure_password \
+                -e POSTGRES_ADMIN_PASSWORD=very_secure_password \
+                -e PBF_URL=http://download.geofabrik.de/europe/monaco-${four_days_ago}.osm.pbf \
+                -e REPLICATION_URL=http://download.geofabrik.de/europe/monaco-updates/ \
+                -e UPDATE_MODE=once \
+                -v nominatim-data-update1:/nominatim \
+                -p 8020:8080 \
+                --name nominatim \
+                nominatim:$NOMINATIM_VERSION &
+
+              ./assert-non-empty-json "http://localhost:8020/search.php?q=avenue%20pasteur"
+              echo -n "check replication log for Update completed. Count:"
+              docker exec nominatim /bin/bash -c 'tail -f /var/log/replication.log | grep -m 1 -c "Update completed." '
+              
+              # Cleanup
+              docker stop nominatim postgres || true
+              docker network rm nominatim-net-update1 || true
+
+          - name: UPDATE_MODE=continuous
+            commands: |-
+              # Start PostgreSQL with PostGIS
+              docker network create nominatim-net-update2
+              docker run -d --rm --name postgres --network nominatim-net-update2 \
+                -e POSTGRES_PASSWORD=very_secure_password \
+                -e POSTGRES_USER=postgres \
+                -e POSTGRES_DB=nominatim \
+                -v postgres-data-update2:/var/lib/postgresql/data \
+                postgis/postgis:16-3.4
+              
+              sleep 10
+              
+              # get the data from few days ago to make sure there really are updates to apply
+              days_ago=`date --date="4 days ago" +%y%m%d`
+              docker run -i --rm --network nominatim-net-update2 \
+                -e POSTGRES_HOST=postgres \
+                -e POSTGRES_PORT=5432 \
+                -e POSTGRES_DB=nominatim \
+                -e NOMINATIM_PASSWORD=very_secure_password \
+                -e POSTGRES_ADMIN_PASSWORD=very_secure_password \
+                -e PBF_URL=http://download.geofabrik.de/europe/monaco-${days_ago}.osm.pbf \
+                -e REPLICATION_URL=http://download.geofabrik.de/europe/monaco-updates/ \
+                -e UPDATE_MODE=continuous \
+                -v nominatim-data-update2:/nominatim \
+                -p 8021:8080 \
+                --name nominatim \
+                nominatim:$NOMINATIM_VERSION &
+
+              ./assert-non-empty-json "http://localhost:8021/search.php?q=avenue%20pasteur"
+              echo -n "check replication log for Update completed. Count:"
+              docker exec nominatim /bin/bash -c 'tail -f /var/log/replication.log | grep -m 1 -c "Update completed." '
+              
+              # Cleanup
+              docker stop nominatim postgres || true
+              docker network rm nominatim-net-update2 || true
+
           - name: Import full style
             commands: |-
               # Start PostgreSQL with PostGIS
