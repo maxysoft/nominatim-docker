@@ -111,4 +111,15 @@ sudo -u nominatim gunicorn \
   --worker-class uvicorn.workers.UvicornWorker \
   nominatim_api.server.falcon.server:run_wsgi
 
-wait
+# Wait for the PID file to be created
+while [ ! -f $GUNICORN_PID_FILE ]; do
+  sleep 1
+done
+
+# Get the PID and wait for the Gunicorn process to exit
+GUNICORN_PID=$(cat $GUNICORN_PID_FILE)
+
+# Wait for the Gunicorn process to exit
+while kill -0 $GUNICORN_PID 2>/dev/null; do
+  sleep 5
+done
