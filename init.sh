@@ -95,8 +95,10 @@ echo "Setting user passwords..."
 PGPASSWORD="${POSTGRES_ADMIN_PASSWORD}" psql -h "${POSTGRES_HOST}" -p "${POSTGRES_PORT}" -U "postgres" -d "postgres" -c "ALTER USER nominatim WITH ENCRYPTED PASSWORD '${NOMINATIM_PASSWORD}';"
 PGPASSWORD="${POSTGRES_ADMIN_PASSWORD}" psql -h "${POSTGRES_HOST}" -p "${POSTGRES_PORT}" -U "postgres" -d "postgres" -c "ALTER USER \"www-data\" WITH ENCRYPTED PASSWORD '${NOMINATIM_PASSWORD}';"
 
-# Note: Database creation and PostGIS extension setup is handled by 'nominatim import' command below
-# The import command will create the database with proper settings
+# Drop database if it exists to ensure clean import
+# Database creation and PostGIS extension setup is handled by 'nominatim import' command below
+echo "Preparing for import..."
+PGPASSWORD="${POSTGRES_ADMIN_PASSWORD}" psql -h "${POSTGRES_HOST}" -p "${POSTGRES_PORT}" -U "postgres" -d "postgres" -c "DROP DATABASE IF EXISTS ${POSTGRES_DB};"
 
 chown -R nominatim:nominatim ${PROJECT_DIR}
 
