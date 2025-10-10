@@ -581,53 +581,77 @@ jobs:
   publish:
     name: Publish docker image
     needs: test
-    runs-on: ubuntu-latest 
+    runs-on: ubuntu-latest
+    # Only run on push to master branch
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    permissions:
+      contents: read
+      packages: write
     
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      
-      - name: Extract Nominatim Version
-        id: get_version
-        run: |
-          echo "NOMINATIM_VERSION=$(grep -oP '(?<=ARG NOMINATIM_VERSION=)[0-9.]+' Dockerfile)" >> $GITHUB_OUTPUT
-          echo "NOMINATIM_VERSION_MINOR=$(grep -oP '(?<=ARG NOMINATIM_VERSION=)[0-9]+\.[0-9]+' Dockerfile)" >> $GITHUB_OUTPUT
-
-      # Compute the Docker tags and labels to apply to the built image
-      - name: Docker meta
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          # List of Docker images to use as base name for tags
-          images: |
-            mediagis/nominatim        
-          
-          # Disable generation of latest tag
-          flavor: |
-            latest=false
-          
-          # Add simple tag with nominatim version + tag with custom date format
-          tags: |
-            type=raw,value=${{ steps.get_version.outputs.NOMINATIM_VERSION }}
-            type=raw,value=${{ steps.get_version.outputs.NOMINATIM_VERSION }}-{{date 'YYYY-MM-DDTHH-mm'}}
-            type=raw,value=${{ steps.get_version.outputs.NOMINATIM_VERSION_MINOR }}
-            type=raw,value=${{ steps.get_version.outputs.NOMINATIM_VERSION_MINOR }}-{{date 'YYYY-MM-DDTHH-mm'}}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Login to DockerHub
-        if: ${{ github.ref == 'refs/heads/master' && github.repository_owner == 'mediagis' }}
-        uses: docker/login-action@v2.1.0
+      - name: Get commit short reference
+        id: get_commit
+        run: echo "SHORT_SHA=${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
+
+      - name: Extract Nominatim Version
+        id: get_version
+        run: echo "NOMINATIM_VERSION=$(grep -oP '(?<=ARG NOMINATIM_VERSION=)[0-9.]+' Dockerfile)" >> $GITHUB_OUTPUT
+
+      # Verify Dockerfile exists and get build info
+      - name: Verify Dockerfile
+        run: |
+          test -f Dockerfile
+          echo "Dockerfile found ✅"
+          echo "Nominatim version: ${{ steps.get_version.outputs.NOMINATIM_VERSION }}"
+          echo "Commit SHA: ${{ steps.get_commit.outputs.SHORT_SHA }}"
+
+      - name: Login to Docker Hub
+        if: ${{ github.repository_owner == 'maxysoft' }}
+        uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-      
-      - name: Build and push
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push to Docker Hub
+        if: ${{ github.repository_owner == 'maxysoft' }}
         uses: docker/build-push-action@v5
         with:
           context: .
           platforms: linux/amd64,linux/arm64
-          push: ${{ github.ref == 'refs/heads/master' && github.repository_owner == 'mediagis' }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          push: true
+          tags: |
+            maxysoft/nominatim:${{ steps.get_commit.outputs.SHORT_SHA }}
+            maxysoft/nominatim:latest
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.created=${{ github.event.head_commit.timestamp }}
+            org.opencontainers.image.version=${{ steps.get_version.outputs.NOMINATIM_VERSION }}
+
+      - name: Build and push to GitHub Container Registry
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}:${{ steps.get_commit.outputs.SHORT_SHA }}
+            ghcr.io/${{ github.repository }}:latest
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.created=${{ github.event.head_commit.timestamp }}
+            org.opencontainers.image.version=${{ steps.get_version.outputs.NOMINATIM_VERSION }}
