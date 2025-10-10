@@ -52,6 +52,15 @@ The trade-off is slightly more complex setup, but with better operational charac
 
 If you're looking for other projects with different architectures, check out https://github.com/smithmicro/n7m.
 
+# Automated Builds
+
+Docker images are automatically built and pushed to Docker Hub on every merge to the master branch. Images are tagged with:
+
+- `maxysoft/nominatim:<commit-sha>` - Specific commit version (e.g., `84b3d22`)
+- `maxysoft/nominatim:latest` - Always points to the latest master build
+
+This ensures every change is automatically available as a Docker image for testing and deployment.
+
 # Contributors
 
 Thanks goes to these wonderful people ([emoji key](https://allcontributors.org/docs/en/emoji-key)):
