@@ -240,11 +240,18 @@ In addition, we also provide a basic `contrib/docker-compose.yml` template which
 Besides the basic docker-compose.yml, there are also some advanced YAML configurations available in the `contrib` folder.
 These files follow the naming convention of `docker-compose-*.yml` and contain comments about the specific use case.
 
+## External PostGIS Database Usage
+
+This version now requires an external PostgreSQL/PostGIS database. See the [External PostGIS Documentation](external-postgis.md) for complete setup instructions.
+
+## Docker Compose Examples
+
+For examples of using this version with external PostgreSQL:
+- [Docker Compose with external PostgreSQL](contrib/docker-compose-external-db.yml)
+
 ## Assorted use cases documented in issues
 
-- [Using an external Postgres database](https://github.com/mediagis/nominatim-docker/issues/245#issuecomment-1072205751)
-  - [Using Amazon's RDS](https://github.com/mediagis/nominatim-docker/issues/378#issuecomment-1278653770)
 - [Hardware sizing for importing the entire planet](https://github.com/mediagis/nominatim-docker/discussions/265)
-- [Upgrading Nominatim](https://github.com/mediagis/nominatim-docker/discussions/317)
+- [Upgrading Nominatim](https://github.com/mediagis/nominatim-docker/discussions/317) 
 - [Using Nominatim UI](https://github.com/mediagis/nominatim-docker/discussions/486#discussioncomment-7239861)
 
