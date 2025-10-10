@@ -95,15 +95,10 @@ echo "Setting user passwords..."
 PGPASSWORD="${POSTGRES_ADMIN_PASSWORD}" psql -h "${POSTGRES_HOST}" -p "${POSTGRES_PORT}" -U "postgres" -d "postgres" -c "ALTER USER nominatim WITH ENCRYPTED PASSWORD '${NOMINATIM_PASSWORD}';"
 PGPASSWORD="${POSTGRES_ADMIN_PASSWORD}" psql -h "${POSTGRES_HOST}" -p "${POSTGRES_PORT}" -U "postgres" -d "postgres" -c "ALTER USER \"www-data\" WITH ENCRYPTED PASSWORD '${NOMINATIM_PASSWORD}';"
 
-# Drop and recreate database
-echo "Recreating database..."
+# Drop the database if it exists (PostgreSQL container may have created it via POSTGRES_DB env var)
+# The nominatim import command will then create it with proper settings
+echo "Preparing for import..."
 PGPASSWORD="${POSTGRES_ADMIN_PASSWORD}" psql -h "${POSTGRES_HOST}" -p "${POSTGRES_PORT}" -U "postgres" -d "postgres" -c "DROP DATABASE IF EXISTS ${POSTGRES_DB};"
-PGPASSWORD="${POSTGRES_ADMIN_PASSWORD}" psql -h "${POSTGRES_HOST}" -p "${POSTGRES_PORT}" -U "postgres" -d "postgres" -c "CREATE DATABASE ${POSTGRES_DB} OWNER nominatim;"
-
-# Enable PostGIS extension
-echo "Enabling PostGIS extension..."
-PGPASSWORD="${NOMINATIM_PASSWORD}" psql -h "${POSTGRES_HOST}" -p "${POSTGRES_PORT}" -U "nominatim" -d "${POSTGRES_DB}" -c "CREATE EXTENSION IF NOT EXISTS postgis;"
-PGPASSWORD="${NOMINATIM_PASSWORD}" psql -h "${POSTGRES_HOST}" -p "${POSTGRES_PORT}" -U "nominatim" -d "${POSTGRES_DB}" -c "CREATE EXTENSION IF NOT EXISTS hstore;"
 
 chown -R nominatim:nominatim ${PROJECT_DIR}
 
