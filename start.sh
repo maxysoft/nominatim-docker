@@ -110,6 +110,7 @@ sudo -u nominatim gunicorn \
   --enable-stdio-inheritance \
   --worker-class uvicorn.workers.UvicornWorker \
   --factory \
+  --access-logfile - \
   nominatim_api.server.falcon.server:run_wsgi
 
 # Wait for the PID file to be created
