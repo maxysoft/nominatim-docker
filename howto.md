@@ -67,6 +67,7 @@ Other places at Geofabrik follow the pattern `https://download.geofabrik.de/$CON
 - `GUNICORN_WORKERS`: Specifies how many Gunicorn worker processes should handle API requests. If not explicitly set, it defaults to the number of available CPU cores `(nproc)`. Increase this value to improve concurrent request handling capacity, but ensure it aligns with your server's CPU resources.
 - `NOMINATIM_PASSWORD`: The password to connect to the database with (default: `qaIACxO6wMR3`)
 - `WARMUP_ON_STARTUP`: Whether to warm up the database caches on container startup by loading tables and indices into RAM. This can improve initial query performance, especially on systems with slow disks and sufficient RAM. However, it will increase the container's startup time. Set to `true` to enable. (default: `false`)
+- `DEBUG_MODE`: Enable verbose debug output showing all executed commands during startup and import. Useful for troubleshooting but creates noisy logs. Set to `true` to enable. (default: `false`)
 
 The following run parameters are available for configuration:
 

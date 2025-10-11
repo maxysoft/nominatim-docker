@@ -1,4 +1,9 @@
-#!/bin/bash -ex
+#!/bin/bash -e
+
+# Enable debug mode if DEBUG_MODE is set to true
+if [ "${DEBUG_MODE}" = "true" ]; then
+  set -x
+fi
 
 tailpid=0
 replicationpid=0
@@ -120,9 +125,6 @@ done
 
 # Get the PID and wait for the Gunicorn process to exit
 GUNICORN_PID=$(cat $GUNICORN_PID_FILE)
-
-# Disable command echoing for the monitoring loop to reduce log noise
-set +x
 
 # Wait for the Gunicorn process to exit
 while kill -0 $GUNICORN_PID 2>/dev/null; do
