@@ -1,4 +1,9 @@
-#!/bin/bash -ex
+#!/bin/bash -e
+
+# Enable debug mode if DEBUG_MODE is set to true
+if [ "${DEBUG_MODE}" = "true" ]; then
+  set -x
+fi
 
 OSMFILE=${PROJECT_DIR}/data.osm.pbf
 

@@ -1,4 +1,9 @@
-#!/bin/bash -ex
+#!/bin/bash -e
+
+# Enable debug mode if DEBUG_MODE is set to true
+if [ "${DEBUG_MODE}" = "true" ]; then
+  set -x
+fi
 
 tailpid=0
 replicationpid=0
@@ -49,7 +54,7 @@ until PGPASSWORD="${NOMINATIM_PASSWORD}" psql -h "${POSTGRES_HOST}" -p "${POSTGR
 done
 echo "PostgreSQL is ready"
 
-cd ${PROJECT_DIR} && sudo -E -u nominatim nominatim refresh --website --functions
+cd ${PROJECT_DIR} && sudo -E -u nominatim nominatim refresh --functions
 
 # start continous replication process
 if [ "$REPLICATION_URL" != "" ] && [ "$FREEZE" != "true" ]; then
@@ -109,6 +114,8 @@ sudo -u nominatim gunicorn \
   --daemon \
   --enable-stdio-inheritance \
   --worker-class uvicorn.workers.UvicornWorker \
+  --factory \
+  --access-logfile - \
   nominatim_api.server.falcon.server:run_wsgi
 
 # Wait for the PID file to be created
