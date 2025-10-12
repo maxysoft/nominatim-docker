@@ -33,10 +33,10 @@ After the import is complete, you can access the Nominatim API at `http://localh
 You can pull specific versions of the Nominatim Docker image by specifying the tag. For example, to use Nominatim version `5.1`:
 
 ```sh
-docker pull mediagis/nominatim:5.1
+docker pull ghcr.io/maxysoft/nominatim-docker:v5.1.0-9b75039
 ```
 
-For a list of available tags, please refer to the [Docker Hub page](https://hub.docker.com/r/mediagis/nominatim/tags).
+For a list of available tags, please refer to the [Docker Hub page](https://hub.docker.com/r/maxysoft/nominatim-docker/tags) or [Github Packages](https://github.com/maxysoft/nominatim-docker/pkgs/container/nominatim-docker).
 
 ## Security Information
 
