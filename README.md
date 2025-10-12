@@ -64,11 +64,11 @@ If you're looking for other projects with different architectures, check out htt
 Docker images are automatically built and pushed to both Docker Hub and GitHub Container Registry on every merge to the master branch. Images are tagged with:
 
 **GitHub Container Registry (always available):**
-- `ghcr.io/maxysoft/nominatim-docker:<commit-sha>` - Specific commit version (e.g., `84b3d22`)
+- `ghcr.io/maxysoft/nominatim-docker:v<version>-<commit-sha>` - Specific version and commit (e.g., `v5.1.0-84b3d22`)
 - `ghcr.io/maxysoft/nominatim-docker:latest` - Always points to the latest master build
 
 **Docker Hub (when secrets are configured):**
-- `maxysoft/nominatim-docker:<commit-sha>` - Specific commit version (e.g., `84b3d22`)
+- `maxysoft/nominatim-docker:v<version>-<commit-sha>` - Specific version and commit (e.g., `v5.1.0-84b3d22`)
 - `maxysoft/nominatim-docker:latest` - Always points to the latest master build
 
 This ensures every change is automatically available as a Docker image for testing and deployment, with GitHub Container Registry as the primary fallback when Docker Hub credentials are not available.
