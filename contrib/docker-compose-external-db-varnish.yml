@@ -1,7 +1,16 @@
+x-logging: &logging
+  logging:
+    driver: "json-file"
+    options:
+      max-size: 10m
+      max-file: "3"
+
 services:
-  postgres:
-    image: postgis/postgis:16-3.4
+  nominatim-postgres:
+    image: postgis/postgis:18-3.6-alpine
     container_name: nominatim-postgres
+    hostname: nominatim-postgres
+    restart: unless-stopped
     environment:
       POSTGRES_PASSWORD: very_secure_password
       POSTGRES_USER: postgres
@@ -17,14 +26,25 @@ services:
       -c work_mem=50MB
       -c effective_cache_size=24GB
       -c synchronous_commit=off
-      -c max_wal_size=1GB
+      -c max_wal_size=2GB
       -c checkpoint_timeout=10min
       -c checkpoint_completion_target=0.9
       -c max_connections=200
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    <<: *logging
+    networks:
+      - nominatim-net
 
   nominatim:
+    image: ghcr.io/maxysoft/nominatim-docker:v5.1.0-9b75039
     container_name: nominatim
-    image: mediagis/nominatim:5.1
+    hostname: nominatim
+    restart: unless-stopped
+    shm_size: 1gb
     environment:
       # External database configuration
       POSTGRES_HOST: postgres
@@ -40,12 +60,18 @@ services:
     volumes:
       - nominatim-data:/nominatim
     depends_on:
-      - postgres
-    shm_size: 1gb
+      nominatim-postgres:
+        condition: service_healthy
+        restart: true
+    <<: *logging
+    networks:
+      - nominatim-net
 
-  varnish:
+  nominatim-varnish:
     image: varnish:8.0.0-alpine
     container_name: nominatim-varnish
+    hostname: nominatim-varnish
+    restart: unless-stopped
     volumes:
       - ./varnish.vcl:/etc/varnish/default.vcl:ro
     ports:
@@ -55,6 +81,9 @@ services:
     command: ["-p", "default_ttl=3600", "-p", "default_grace=3600"]
     depends_on:
       - nominatim
+    <<: *logging
+    networks:
+      - nominatim-net
 
 volumes:
   postgres-data:
