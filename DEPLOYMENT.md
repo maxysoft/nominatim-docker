@@ -20,11 +20,11 @@ If Docker Hub secrets are not configured, images will only be pushed to GitHub C
 The workflow creates tags on both registries when Docker Hub is configured:
 
 **GitHub Container Registry (always available):**
-- `ghcr.io/maxysoft/nominatim-docker:<commit-sha>` - Specific commit version (e.g., `84b3d22`)
+- `ghcr.io/maxysoft/nominatim-docker:v<version>-<commit-sha>` - Specific version and commit (e.g., `v5.1.0-84b3d22`)
 - `ghcr.io/maxysoft/nominatim-docker:latest` - Always points to the latest master build
 
 **Docker Hub (when secrets are configured):**
-- `maxysoft/nominatim-docker:<commit-sha>` - Specific commit version (e.g., `84b3d22`)
+- `maxysoft/nominatim-docker:v<version>-<commit-sha>` - Specific version and commit (e.g., `v5.1.0-84b3d22`)
 - `maxysoft/nominatim-docker:latest` - Always points to the latest master build
 
 ### Build Process
