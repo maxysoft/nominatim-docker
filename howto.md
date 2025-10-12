@@ -249,6 +249,7 @@ This version now requires an external PostgreSQL/PostGIS database. See the [Exte
 
 For examples of using this version with external PostgreSQL:
 - [Docker Compose with external PostgreSQL](contrib/docker-compose-external-db.yml)
+- [Docker Compose with external PostgreSQL and Varnish cache](contrib/docker-compose-external-db-varnish.yml) - Production-ready setup with Varnish 8 for query caching
 
 ## Assorted use cases documented in issues
 

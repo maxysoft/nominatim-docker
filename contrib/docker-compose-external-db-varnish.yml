@@ -1,0 +1,61 @@
+services:
+  postgres:
+    image: postgis/postgis:16-3.4
+    container_name: nominatim-postgres
+    environment:
+      POSTGRES_PASSWORD: very_secure_password
+      POSTGRES_USER: postgres
+      POSTGRES_DB: nominatim
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    # PostgreSQL configuration optimized for Nominatim
+    command: >
+      postgres
+      -c shared_buffers=2GB
+      -c maintenance_work_mem=10GB
+      -c autovacuum_work_mem=2GB
+      -c work_mem=50MB
+      -c effective_cache_size=24GB
+      -c synchronous_commit=off
+      -c max_wal_size=1GB
+      -c checkpoint_timeout=10min
+      -c checkpoint_completion_target=0.9
+      -c max_connections=200
+
+  nominatim:
+    container_name: nominatim
+    image: mediagis/nominatim:5.1
+    environment:
+      # External database configuration
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: nominatim
+      NOMINATIM_PASSWORD: very_secure_password
+      POSTGRES_ADMIN_PASSWORD: very_secure_password
+      
+      # Nominatim configuration
+      # see https://github.com/mediagis/nominatim-docker/tree/master/5.1#configuration for more options
+      PBF_URL: https://download.geofabrik.de/europe/monaco-latest.osm.pbf
+      REPLICATION_URL: https://download.geofabrik.de/europe/monaco-updates/
+    volumes:
+      - nominatim-data:/nominatim
+    depends_on:
+      - postgres
+    shm_size: 1gb
+
+  varnish:
+    image: varnish:8.0.0-alpine
+    container_name: nominatim-varnish
+    volumes:
+      - ./varnish.vcl:/etc/varnish/default.vcl:ro
+    ports:
+      - "80:80"
+    environment:
+      VARNISH_SIZE: 1G
+    command: ["-p", "default_ttl=3600", "-p", "default_grace=3600"]
+    depends_on:
+      - nominatim
+
+volumes:
+  postgres-data:
+  nominatim-data:
