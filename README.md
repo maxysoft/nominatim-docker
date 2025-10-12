@@ -2,13 +2,17 @@
 
 100% working container for [Nominatim](https://github.com/openstreetmap/Nominatim).
 
+> [!IMPORTANT]  
+> ⚠️ The following code modifications and implementations were generated with the assistance of **AI (Microsoft Copilot)**.  
+> Please review carefully before using in production.
+
 > **⚠️ Important:** This version requires an external PostgreSQL database with PostGIS. See [external-postgis.md](external-postgis.md) for setup instructions.
 
 ![Nominatim Version](https://img.shields.io/badge/Nominatim%20Version-5.1.0-blue?style=flat-square) ![GitHub Workflow Status](https://img.shields.io/github/actions/workflow/status/mediagis/nominatim-docker/ci.yml?branch=master&style=flat-square) ![Github All Contributors](https://img.shields.io/github/all-contributors/mediagis/nominatim-docker?style=flat-square) ![Docker Pulls](https://img.shields.io/docker/pulls/mediagis/nominatim?style=flat-square) ![Docker Image Size with architecture (latest by date/latest semver)](https://img.shields.io/docker/image-size/mediagis/nominatim?style=flat-square)
 
 ## Quick Start
 
-The easiest way to use Nominatim Docker is by pulling the pre-built images from [Docker Hub](https://hub.docker.com/r/mediagis/nominatim).
+The easiest way to use Nominatim Docker is by pulling the pre-built images from [Docker Hub](https://hub.docker.com/r/maxysoft/nominatim-docker) or [Github Packages](https://github.com/maxysoft/nominatim-docker/pkgs/container/nominatim-docker).
 
 To quickly get a Nominatim instance up and running with a small dataset (e.g., Monaco), use Docker Compose with an external PostgreSQL database:
 
