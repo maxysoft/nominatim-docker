@@ -17,9 +17,16 @@ To quickly get a Nominatim instance up and running with a small dataset (e.g., M
 docker compose -f contrib/docker-compose-external-db.yml up
 ```
 
+For production deployments with caching, use the Varnish-enabled configuration:
+
+```sh
+# Use the Varnish-enabled docker-compose configuration
+docker compose -f contrib/docker-compose-external-db-varnish.yml up
+```
+
 Or see [external-postgis.md](external-postgis.md) for complete setup instructions with custom configurations.
 
-After the import is complete, you can access the Nominatim API at `http://localhost:8080/search.php?q=avenue%20pasteur`.
+After the import is complete, you can access the Nominatim API at `http://localhost:8080/search.php?q=avenue%20pasteur` (or `http://localhost/search.php?q=avenue%20pasteur` when using the Varnish configuration).
 
 ## Accessing Different Versions
 
