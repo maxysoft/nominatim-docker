@@ -114,9 +114,8 @@ sudo -u nominatim gunicorn \
   --daemon \
   --enable-stdio-inheritance \
   --worker-class uvicorn.workers.UvicornWorker \
-  --factory \
   --access-logfile - \
-  nominatim_api.server.falcon.server:run_wsgi
+  "nominatim_api.server.falcon.server:run_wsgi()"
 
 # Wait for the PID file to be created
 while [ ! -f $GUNICORN_PID_FILE ]; do
