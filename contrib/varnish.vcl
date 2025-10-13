@@ -1,4 +1,5 @@
 vcl 4.1;
+import std;
 
 # Backend configuration - Nominatim service
 backend default {

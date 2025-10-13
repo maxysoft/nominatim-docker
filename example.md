@@ -5,17 +5,6 @@ docker run -it \
   #Sets the flatnode file, which is to reduce the load on the database when you plan to use multiple countries together bigger than 6GB
   #and highly recommended if you want to import the World!
   -v nominatim-flatnode:/nominatim/flatnode \
-  
-  #PostgreSQL Tuning, without the need to edit the .conf after the setup (Nominatim default recommended values)  
-  -e POSTGRES_SHARED_BUFFERS=2GB \
-  -e POSTGRES_MAINTENANCE_WORK_MEM=10GB \
-  -e POSTGRES_AUTOVACUUM_WORK_MEM=2GB \
-  -e POSTGRES_WORK_MEM=50MB \
-  -e POSTGRES_EFFECTIVE_CACHE_SIZE=24GB \
-  -e POSTGRES_SYNCHRONOUS_COMMIT=off \
-  -e POSTGRES_MAX_WAL_SIZE=1GB \
-  -e POSTGRES_CHECKPOINT_TIMEOUT=10min \
-  -e POSTGRES_CHECKPOINT_COMPLETION_TARGET=0.9 \
 
   #Sets the target for the initial file for the import. If the file is already on the local system you use:
   #-e PBF_PATH=/path/to/your/planet-latest.osm.pbf   PBF_URL cannot be used together with PBF_PATH!
@@ -75,5 +64,5 @@ docker run -it \
   --name nominatim \
 
   #Here you choose the Docker image and version
-  mediagis/nominatim:5.1 
+  ghcr.io/maxysoft/nominatim-docker:latest
 ```

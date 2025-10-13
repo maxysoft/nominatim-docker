@@ -5,6 +5,29 @@ if [ "${DEBUG_MODE}" = "true" ]; then
   set -x
 fi
 
+# Verify REPLICATION_URL is reachable; if not, unset it so Nominatim won't fail to start.
+_check_replication_url() {
+  if [ -n "${REPLICATION_URL}" ]; then
+    attempts=0
+    max_attempts=3
+    sleep_between=2
+
+    while [ $attempts -lt $max_attempts ]; do
+      if curl --head --silent --fail --max-time 5 "${REPLICATION_URL}" >/dev/null 2>&1; then
+        echo "REPLICATION_URL is reachable: ${REPLICATION_URL}"
+        return 0
+      fi
+      attempts=$((attempts + 1))
+      echo "Warning: REPLICATION_URL not reachable (attempt $attempts/$max_attempts). Retrying in ${sleep_between}s..."
+      sleep $sleep_between
+    done
+
+    echo "Warning: REPLICATION_URL '${REPLICATION_URL}' unreachable after ${max_attempts} attempts. Continuing without replication."
+    unset REPLICATION_URL
+    export REPLICATION_URL=
+  fi
+}
+
 OSMFILE=${PROJECT_DIR}/data.osm.pbf
 
 CURL=("curl" "-L" "-A" "${USER_AGENT}" "--fail-with-body")
@@ -127,6 +150,8 @@ sudo -E -u nominatim nominatim index --threads $THREADS
 
 sudo -E -u nominatim nominatim admin --check-database
 
+# verify the replication url is reachable before attempting to use it
+_check_replication_url
 if [ "$REPLICATION_URL" != "" ]; then
   sudo -E -u nominatim nominatim replication --init
   if [ "$FREEZE" = "true" ]; then

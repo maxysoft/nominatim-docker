@@ -40,20 +40,26 @@ All other Nominatim configuration variables remain the same as in the original d
 Here's a complete example using Docker Compose with a separate PostGIS container:
 
 ```yaml
-version: "3.8"
+x-logging: &logging
+  logging:
+    driver: "json-file"
+    options:
+      max-size: 10m
+      max-file: "3"
 
 services:
-  postgres:
-    image: postgis/postgis:16-3.4
+  nominatim-postgres:
+    image: postgis/postgis:18-3.6-alpine
     container_name: nominatim-postgres
+    hostname: nominatim-postgres
+    restart: unless-stopped
     environment:
       POSTGRES_PASSWORD: very_secure_password
       POSTGRES_USER: postgres
       POSTGRES_DB: nominatim
     volumes:
       - postgres-data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
+    # PostgreSQL configuration optimized for Nominatim
     command: >
       postgres
       -c shared_buffers=2GB
@@ -62,14 +68,25 @@ services:
       -c work_mem=50MB
       -c effective_cache_size=24GB
       -c synchronous_commit=off
-      -c max_wal_size=1GB
+      -c max_wal_size=2GB
       -c checkpoint_timeout=10min
       -c checkpoint_completion_target=0.9
       -c max_connections=200
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    <<: *logging
+    networks:
+      - nominatim-net
 
   nominatim:
+    image: ghcr.io/maxysoft/nominatim-docker:v5.1.0-9b75039
     container_name: nominatim
-    image: maxysoft/nominatim:5.1
+    hostname: nominatim
+    restart: unless-stopped
+    shm_size: 1gb
     ports:
       - "8080:8080"
     environment:
@@ -81,17 +98,26 @@ services:
       POSTGRES_ADMIN_PASSWORD: very_secure_password
       
       # Nominatim configuration
+      # see https://github.com/mediagis/nominatim-docker/tree/master/5.1#configuration for more options
       PBF_URL: https://download.geofabrik.de/europe/monaco-latest.osm.pbf
       REPLICATION_URL: https://download.geofabrik.de/europe/monaco-updates/
     volumes:
       - nominatim-data:/nominatim
     depends_on:
-      - postgres
-    shm_size: 1gb
+      nominatim-postgres:
+        condition: service_healthy
+        restart: true
+    <<: *logging
+    networks:
+      - nominatim-net
 
 volumes:
   postgres-data:
   nominatim-data:
+
+networks:
+  nominatim-net:
+    name: nominatim-net
 ```
 
 ## Database Setup

@@ -72,13 +72,19 @@ services:
     container_name: nominatim-varnish
     hostname: nominatim-varnish
     restart: unless-stopped
+    command: ["-p", "default_ttl=3600", "-p", "default_grace=3600"]
     volumes:
       - ./varnish.vcl:/etc/varnish/default.vcl:ro
     ports:
       - "80:80"
     environment:
       VARNISH_SIZE: 1G
-    command: ["-p", "default_ttl=3600", "-p", "default_grace=3600"]
+    cap_add:
+      - IPC_LOCK
+    ulimits:
+      memlock:
+        soft: 1207959552
+        hard: 1207959552
     depends_on:
       - nominatim
     <<: *logging

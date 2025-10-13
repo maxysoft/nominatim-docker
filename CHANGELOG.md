@@ -5,7 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2025/10/13]
+
+### Changed
+- Documentation update
+
+### Added
+- Added missing in import std; in varnish.vcl
+- Added missing settings in docker-compose-external-db-varnish.yml
+- Added a check that verify if the REPLICATION_URL is reachable, if set. If the REPLICATION_URL is set but unreachable for 
+  some reason, nominatim will crash. The check will set REPLICATION_URL to "" (empty) if doesn't work
+
+
+## [2025/10/11]
 
 ### Changed
 - Docker image tags now include Nominatim version: `v<version>-<commit-sha>` (e.g., `v5.1.0-291dcde`)
