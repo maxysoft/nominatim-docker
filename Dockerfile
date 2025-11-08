@@ -1,5 +1,5 @@
-ARG NOMINATIM_VERSION=5.1.0
-ARG USER_AGENT=mediagis/nominatim-docker:${NOMINATIM_VERSION}
+ARG NOMINATIM_VERSION=5.2.0
+ARG USER_AGENT=maxysoft/nominatim-docker:${NOMINATIM_VERSION}
 
 FROM ubuntu:24.04 AS build
 
