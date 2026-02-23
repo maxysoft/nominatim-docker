@@ -32,12 +32,12 @@ docker run -it \
   -e REPLICATION_URL=https://download.geofabrik.de/europe/monaco-updates/ \
   -p 8080:8080 \
   --name nominatim \
-  mediagis/nominatim:5.1
+  ghcr.io/maxysoft/nominatim-docker:v5.2.0-cbe2ec7
 ```
 
 Port 8080 is the nominatim HTTP API port and 5432 is the Postgres port, which you may or may not want to expose.
 
-If you want to check that your data import was successful, you can use the API with the following URL: http://localhost:8080/search.php?q=avenue%20pasteur
+If you want to check that your data import was successful, you can use the API with the following URL: http://localhost:8080/search?q=avenue%20pasteur
 
 ## Configuration
 
@@ -46,20 +46,21 @@ If you want to check that your data import was successful, you can use the API w
 The following environment variables are available for configuration:
 
 - `PBF_URL`: Which [OSM extract](#openstreetmap-data-extracts) to download and import. It cannot be used together with `PBF_PATH`.
-  Check [https://download.geofabrik.de](https://download.geofabrik.de) 
+  Check [https://download.geofabrik.de](https://download.geofabrik.de)
   Since the download speed is restricted at Geofabrik, there is a recommended list of mirrors for importing the full planet at [OSM Wiki](https://wiki.openstreetmap.org/wiki/Planet.osm#Planet.osm_mirrors).
   At the mirror sites you can find the folder /planet which contains the planet-latest.osm.pbf
   and often a `/replication` folder for the `REPLICATION_URL`.
 - `PBF_PATH`: Which [OSM extract](#openstreetmap-data-extracts) to import from the .pbf file inside the container. It cannot be used together with `PBF_URL`.
 - `REPLICATION_URL`: Where to get updates from. For example Geofabrik's update for the Europe extract are available at `https://download.geofabrik.de/europe-updates/`
 Other places at Geofabrik follow the pattern `https://download.geofabrik.de/$CONTINENT/$COUNTRY-updates/`
- 
+
 - `REPLICATION_UPDATE_INTERVAL`: How often upstream publishes diffs (in seconds, default: `86400`). _Requires `REPLICATION_URL` to be set._
 - `REPLICATION_RECHECK_INTERVAL`: How long to sleep if no update found yet (in seconds, default: `900`). _Requires `REPLICATION_URL` to be set._
-- `UPDATE_MODE`: How to run replication to [update nominatim data](https://nominatim.org/release-docs/5.1/admin/Update/#updating-nominatim). Options: `continuous`/`once`/`catch-up`/`none` (default: `none`)
+- `UPDATE_MODE`: How to run replication to [update nominatim data](https://nominatim.org/release-docs/5.2/admin/Update/#updating-nominatim). Options: `continuous`/`once`/`catch-up`/`none` (default: `none`)
 - `FREEZE`: Freeze database and disable dynamic updates to save space. (default: `false`)
 - `REVERSE_ONLY`: If you only want to use the Nominatim database for reverse lookups. (default: `false`)
-- `IMPORT_WIKIPEDIA`: Whether to download and import the Wikipedia importance dumps (`true`) or path to importance dump in the container. Importance dumps improve the scoring of results. On a beefy 10 core server, this takes around 5 minutes. (default: `false`)
+- `IMPORT_WIKIPEDIA`: Whether to download and import the Wikipedia importance dumps (`true`) or path to importance dump in the container. Importance dumps improve the scoring of results. On a beefy 10-core server, this takes around 5 minutes. (default: `false`)
+- `IMPORT_SECONDARY_WIKIPEDIA`: Whether to download and import the Wikipedia secondary importance dumps (`true`) or path to secondary importance dump in the container. (default: `false`)
 - `IMPORT_US_POSTCODES`: Whether to download and import the US postcode dump (`true`) or path to US postcode dump in the container. (default: `false`)
 - `IMPORT_GB_POSTCODES`: Whether to download and import the GB postcode dump (`true`) or path to GB postcode dump in the container. (default: `false`)
 - `IMPORT_TIGER_ADDRESSES`: Whether to download and import the Tiger address data (`true`) or path to a preprocessed Tiger address set in the container. (default: `false`)
@@ -83,7 +84,7 @@ This version requires an external PostgreSQL database with PostGIS extension. Th
 - `NOMINATIM_PASSWORD`: Password for the Nominatim database users
 - `POSTGRES_ADMIN_PASSWORD` (default: same as `NOMINATIM_PASSWORD`): Password for the PostgreSQL admin user
 
-For PostgreSQL tuning, configure your external PostgreSQL server according to the [official Nominatim documentation](https://nominatim.org/release-docs/5.1/admin/Installation/#tuning-the-postgresql-database). 
+For PostgreSQL tuning, configure your external PostgreSQL server according to the [official Nominatim documentation](https://nominatim.org/release-docs/5.2/admin/Installation/#tuning-the-postgresql-database). 
 
 See [external-postgis.md](external-postgis.md) for complete setup instructions and Docker Compose examples.
 
@@ -101,12 +102,12 @@ Available options are :
 - `full`: Default style that also includes points of interest.
 - `extratags`: Like the full style but also adds most of the OSM tags into the extratags column.
 
-See https://nominatim.org/release-docs/5.1/admin/Import/#filtering-imported-data for more details on those styles.
+See https://nominatim.org/release-docs/5.2/admin/Import/#filtering-imported-data for more details on those styles.
 
 ### Flatnode files
 
-In addition you can also mount a volume / bind-mount on `/nominatim/flatnode` (see: Persistent container data) to use flatnode storage. This is advised for bigger imports (Europe, North America etc.), see: https://nominatim.org/release-docs/5.1/admin/Import/#flatnode-files. If the mount is available for the container, the flatnode configuration is automatically set and used.
-  
+In addition you can also mount a volume / bind-mount on `/nominatim/flatnode` (see: Persistent container data) to use flatnode storage. This is advised for bigger imports (Europe, North America etc.), see: https://nominatim.org/release-docs/5.2/admin/Import/#flatnode-files. If the mount is available for the container, the flatnode configuration is automatically set and used.
+
 ```sh
 docker run -it \
   -v nominatim-flatnode:/nominatim/flatnode \
@@ -114,7 +115,7 @@ docker run -it \
   -e REPLICATION_URL=https://download.geofabrik.de/europe/monaco-updates/ \
   -p 8080:8080 \
   --name nominatim \
-  mediagis/nominatim:5.1
+  ghcr.io/maxysoft/nominatim-docker:v5.2.0-cbe2ec7
 ```
 
 ### Configuration Example
@@ -142,7 +143,7 @@ docker run -it --shm-size=1g \
   -v nominatim-data:/nominatim \
   -p 8080:8080 \
   --name nominatim \
-  mediagis/nominatim:5.1
+  ghcr.io/maxysoft/nominatim-docker:v5.2.0-cbe2ec7
 ```
 
 ## OpenStreetMap Data Extracts
@@ -165,14 +166,14 @@ docker run -it \
   -p 8080:8080 \
   -v /osm-maps/data:/nominatim/data \
   --name nominatim \
-  mediagis/nominatim:5.1
+  ghcr.io/maxysoft/nominatim-docker:v5.2.0-cbe2ec7
 ```
 
 where the _/osm-maps/data/_ directory contains _monaco-latest.osm.pbf_ file that is mounted and available in container: _/nominatim/data/monaco-latest.osm.pbf_
 
 ## Updating the database
 
-Full documentation for Nominatim update available [here](https://nominatim.org/release-docs/5.1/admin/Update/). For a list of other methods see the output of:
+Full documentation for Nominatim update available [here](https://nominatim.org/release-docs/5.2/admin/Update/). For a list of other methods see the output of:
 
 ```sh
 docker exec -it nominatim sudo -u nominatim nominatim replication --help
@@ -196,7 +197,7 @@ docker run -it \
   -p 8080:8080 \
   -v /osm-maps/data:/nominatim/data \
   --name nominatim \
-  mediagis/nominatim:5.1
+  ghcr.io/maxysoft/nominatim-docker:v5.2.0-cbe2ec7
 ```
 
 where the _/osm-maps/data/_ directory contains _merged.osm.pbf_ file that is mounted and available in container: _/nominatim/data/merged.osm.pbf_
@@ -212,12 +213,12 @@ docker run -it \
   -p 8080:8080 \
   -v /osm-maps/extras:/nominatim/extras \
   --name nominatim \
-  mediagis/nominatim:5.1
+  ghcr.io/maxysoft/nominatim-docker:v5.2.0-cbe2ec7
 ```
 
 Where the path to the importance dump is given relative to the container. (The file does not need to be named `wikimedia-importance.sql.gz`.) The same works for `IMPORT_US_POSTCODES` and `IMPORT_GB_POSTCODES`.
 
-For more information about the Tiger address file, see [Installing TIGER housenumber data for the US](https://nominatim.org/release-docs/5.1/customize/Tiger/).
+For more information about the Tiger address file, see [Installing TIGER housenumber data for the US](https://nominatim.org/release-docs/5.2/customize/Tiger/).
 
 ## Development
 
@@ -253,7 +254,9 @@ For examples of using this version with external PostgreSQL:
 
 ## Assorted use cases documented in issues
 
+- [Using an external Postgres database](https://github.com/mediagis/nominatim-docker/issues/245#issuecomment-1072205751)
+  - [Using Amazon's RDS](https://github.com/mediagis/nominatim-docker/issues/378#issuecomment-1278653770)
 - [Hardware sizing for importing the entire planet](https://github.com/mediagis/nominatim-docker/discussions/265)
-- [Upgrading Nominatim](https://github.com/mediagis/nominatim-docker/discussions/317) 
+- [Upgrading Nominatim](https://github.com/mediagis/nominatim-docker/discussions/317)
 - [Using Nominatim UI](https://github.com/mediagis/nominatim-docker/discussions/486#discussioncomment-7239861)
 
