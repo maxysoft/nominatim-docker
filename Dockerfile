@@ -59,8 +59,7 @@ RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked pip install --brea
     osmium \
     psycopg[binary] \
     falcon \
-    uvicorn \
-    gunicorn \
+    "gunicorn>=25.0" \
     nominatim-api
 
 
