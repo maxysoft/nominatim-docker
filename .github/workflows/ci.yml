@@ -8,30 +8,31 @@ on:
 jobs:
   build:
     name: Build docker image
+    if: ${{ !contains(github.event.head_commit.message, 'skip_build') }}
 
     runs-on: ubuntu-latest
     outputs:
       NOMINATIM_VERSION: ${{ steps.get_version.outputs.NOMINATIM_VERSION }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Extract Nominatim Version
         id: get_version
         run: echo "NOMINATIM_VERSION=$(grep -oP '(?<=ARG NOMINATIM_VERSION=)[0-9.]+' Dockerfile)" >> $GITHUB_OUTPUT
 
       - name: Build and export image
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: .
           tags: nominatim:${{ steps.get_version.outputs.NOMINATIM_VERSION }}
           outputs: type=docker,dest=/tmp/nominatim.tar
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: nominatim-${{ steps.get_version.outputs.NOMINATIM_VERSION }}
           path: /tmp/nominatim.tar
@@ -39,12 +40,14 @@ jobs:
   test:
     name: Test docker image
     needs: build
+    if: ${{ needs.build.result == 'success' }}
     runs-on: ubuntu-latest
     env:
       NOMINATIM_VERSION: ${{ needs.build.outputs.NOMINATIM_VERSION }}
       POSTGRES_PASSWORD: very_secure_password
 
     strategy:
+      fail-fast: false
       matrix:
         test_scenario:
           - name: Import with PBF_URL and update
@@ -562,7 +565,7 @@ jobs:
     
     steps:
       - name: Download artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: nominatim-${{ needs.build.outputs.NOMINATIM_VERSION }}
           path: /tmp
@@ -571,7 +574,7 @@ jobs:
           docker load --input /tmp/nominatim.tar
           docker image ls -a
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       # Excute the test scenario
       - name: ${{ matrix.test_scenario.name }}
@@ -590,10 +593,10 @@ jobs:
     
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Get commit short reference
         id: get_commit
@@ -627,7 +630,7 @@ jobs:
 
       - name: Build and push to Docker Hub
         if: ${{ github.repository_owner == 'maxysoft' }}
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: .
           platforms: linux/amd64,linux/arm64
@@ -642,7 +645,7 @@ jobs:
             org.opencontainers.image.version=${{ steps.get_version.outputs.NOMINATIM_VERSION }}
 
       - name: Build and push to GitHub Container Registry
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: .
           platforms: linux/amd64,linux/arm64

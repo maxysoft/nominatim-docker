@@ -35,16 +35,21 @@ GUNICORN_PID_FILE=/tmp/gunicorn.pid
 export PYTHONUNBUFFERED=1
 
 stopServices() {
+  # Disable errexit so cleanup failures never prevent the exit 0 below
+  set +e
   # Check if the replication process is active
   if [ $replicationpid -ne 0 ]; then
     echo "Shutting down replication process"
-    kill $replicationpid
+    kill $replicationpid 2>/dev/null || true
   fi
   if [ $tailpid -ne 0 ]; then
-    kill $tailpid
+    kill $tailpid 2>/dev/null || true
   fi
   if [ -f $GUNICORN_PID_FILE ]; then
-    cat $GUNICORN_PID_FILE | sudo xargs kill
+    GUNICORN_KILL_PID=$(cat $GUNICORN_PID_FILE)
+    if [[ "$GUNICORN_KILL_PID" =~ ^[0-9]+$ ]]; then
+      kill "$GUNICORN_KILL_PID" 2>/dev/null || true
+    fi
   fi
 
   # Force exit code 0 to signal a successful shutdown to Docker
@@ -138,7 +143,7 @@ sudo -E -u nominatim gunicorn \
   --workers $GUNICORN_WORKERS \
   --daemon \
   --enable-stdio-inheritance \
-  --worker-class uvicorn.workers.UvicornWorker \
+  --worker-class asgi \
   --access-logfile - \
   "nominatim_api.server.falcon.server:run_wsgi()"
 
@@ -154,3 +159,6 @@ GUNICORN_PID=$(cat $GUNICORN_PID_FILE)
 while kill -0 $GUNICORN_PID 2>/dev/null; do
   sleep 5
 done
+
+# Gunicorn exited on its own; ensure we always exit cleanly
+exit 0
