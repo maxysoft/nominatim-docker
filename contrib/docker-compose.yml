@@ -1,24 +1,55 @@
+x-logging: &logging
+  logging:
+    driver: "json-file"
+    options:
+      max-size: 10m
+      max-file: "3"
+
 services:
-  postgres:
-    image: postgis/postgis:16-3.4
+  nominatim-postgres:
+    image: postgis/postgis:18-3.6-alpine
     container_name: nominatim-postgres
+    hostname: nominatim-postgres
+    restart: unless-stopped
     environment:
       POSTGRES_PASSWORD: very_secure_password
       POSTGRES_USER: postgres
       POSTGRES_DB: nominatim
     volumes:
       - postgres-data:/var/lib/postgresql/data
-    ports:
-      - "127.0.0.1:5432:5432"
+    # PostgreSQL configuration optimized for 16 GB RAM machine
+    command: >
+      postgres
+      -c shared_buffers=4GB
+      -c maintenance_work_mem=6GB
+      -c autovacuum_work_mem=1GB
+      -c work_mem=50MB
+      -c effective_cache_size=10GB
+      -c synchronous_commit=off
+      -c max_wal_size=3GB
+      -c checkpoint_timeout=20min
+      -c checkpoint_completion_target=0.9
+      -c max_connections=100
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    <<: *logging
+    networks:
+      - nominatim-net
 
   nominatim:
+    image: ghcr.io/maxysoft/nominatim-docker:latest
     container_name: nominatim
-    image: ghcr.io/maxysoft/nominatim-docker:v5.1.0-9b75039
+    hostname: nominatim
+    restart: unless-stopped
+    shm_size: 1gb
     ports:
       - "8080:8080"
     environment:
       # External database configuration
-      POSTGRES_HOST: postgres
+      POSTGRES_HOST: nominatim-postgres
       POSTGRES_PORT: 5432
       POSTGRES_DB: nominatim
       NOMINATIM_PASSWORD: very_secure_password
@@ -28,12 +59,26 @@ services:
       # see https://github.com/mediagis/nominatim-docker/tree/master/5.1#configuration for more options
       PBF_URL: https://download.geofabrik.de/europe/monaco-latest.osm.pbf
       REPLICATION_URL: https://download.geofabrik.de/europe/monaco-updates/
+
+      # Read-only Hetzner storage box for supplementary data (Wikipedia, postcodes, Tiger).
+      # Uncomment and set IMPORT_WIKIPEDIA / IMPORT_GB_POSTCODES / IMPORT_US_POSTCODES to "true" to use them.
+      # STORAGE_USER: u355874-sub1
+      # STORAGE_HOST: u355874-sub1.your-storagebox.de
+      # STORAGE_PASSWORD: DMg5bmLPY7npHL2Q
     volumes:
       - nominatim-data:/nominatim
     depends_on:
-      - postgres
-    shm_size: 1gb
+      nominatim-postgres:
+        condition: service_healthy
+        restart: true
+    <<: *logging
+    networks:
+      - nominatim-net
 
 volumes:
   postgres-data:
   nominatim-data:
+
+networks:
+  nominatim-net:
+    name: nominatim-net

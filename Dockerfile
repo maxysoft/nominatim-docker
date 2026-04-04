@@ -1,7 +1,10 @@
-ARG NOMINATIM_VERSION=5.2.0
+ARG NOMINATIM_VERSION=5.3.0
 ARG USER_AGENT=maxysoft/nominatim-docker:${NOMINATIM_VERSION}
+# Pin to a specific digest so tag mutations can never change the base image unexpectedly.
+# To upgrade: docker pull debian:13.4-slim, get new digest, update ARG below.
+ARG BASE_IMAGE=debian:13.4-slim@sha256:26f98ccd92fd0a44d6928ce8ff8f4921b4d2f535bfa07555ee5d18f61429cf0c
 
-FROM ubuntu:24.04 AS build
+FROM ${BASE_IMAGE} AS build
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV LANG=C.UTF-8
@@ -22,8 +25,9 @@ RUN  \
     && apt-get -y update -qq \
     && apt-get -y install \
         locales \
+        ca-certificates \
     && locale-gen en_US.UTF-8 \
-    && update-locale LANG=en_US.UTF-8 \
+    && echo 'LANG=en_US.UTF-8' > /etc/default/locale \
     && apt-get -y install \
         -o APT::Install-Recommends="false" \
         -o APT::Install-Suggests="false" \

@@ -32,7 +32,14 @@ OSMFILE=${PROJECT_DIR}/data.osm.pbf
 
 CURL=("curl" "-L" "-A" "${USER_AGENT}" "--fail-with-body")
 
-SCP='sshpass -p DMg5bmLPY7npHL2Q scp -o StrictHostKeyChecking=no u355874-sub1@u355874-sub1.your-storagebox.de'
+# Read-only Hetzner storage box credentials used to download supplementary data
+# (Wikipedia importance dump, GB/US postcodes, Tiger addresses).
+# These are intentionally published — the account is strictly read-only.
+# You can override all three by setting the corresponding environment variables.
+STORAGE_USER="${STORAGE_USER:-u355874-sub1}"
+STORAGE_HOST="${STORAGE_HOST:-u355874-sub1.your-storagebox.de}"
+STORAGE_PASSWORD="${STORAGE_PASSWORD:-DMg5bmLPY7npHL2Q}"
+SCP="sshpass -p ${STORAGE_PASSWORD} scp -o StrictHostKeyChecking=no ${STORAGE_USER}@${STORAGE_HOST}"
 
 # Check if THREADS is not set or is empty
 if [ -z "$THREADS" ]; then
@@ -69,7 +76,7 @@ if [ "$IMPORT_GB_POSTCODES" = "true" ]; then
 elif [ -f "$IMPORT_GB_POSTCODES" ]; then
   # use local file if asked
   ln -s "$IMPORT_GB_POSTCODES" ${PROJECT_DIR}/gb_postcodes.csv.gz
-else \
+else
   echo "Skipping optional GB postcode import"
 fi;
 

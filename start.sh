@@ -57,7 +57,7 @@ trap stopServices SIGTERM TERM INT
 if id nominatim >/dev/null 2>&1; then
   echo "user nominatim already exists"
 else
-  useradd -m -p ${NOMINATIM_PASSWORD} nominatim
+  useradd -m nominatim
 fi
 
 IMPORT_FINISHED=${PROJECT_DIR}/import-finished

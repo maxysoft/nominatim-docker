@@ -8,24 +8,44 @@
 
 > **⚠️ Important:** This version requires an external PostgreSQL database with PostGIS. See [external-postgis.md](external-postgis.md) for setup instructions.
 
-![Nominatim Version](https://img.shields.io/badge/Nominatim%20Version-5.1.0-blue?style=flat-square) ![GitHub Workflow Status](https://img.shields.io/github/actions/workflow/status/mediagis/nominatim-docker/ci.yml?branch=master&style=flat-square) ![Github All Contributors](https://img.shields.io/github/all-contributors/mediagis/nominatim-docker?style=flat-square) ![Docker Pulls](https://img.shields.io/docker/pulls/mediagis/nominatim?style=flat-square) ![Docker Image Size with architecture (latest by date/latest semver)](https://img.shields.io/docker/image-size/mediagis/nominatim?style=flat-square)
+> [!WARNING]
+> **Base image changed from `ubuntu:24.04` to `debian:13.4-slim`** (pinned by SHA256 digest).
+> My tests passed but be sure to test on your environment if you're using it in production.
+
+## Supplementary Data — Storage Box Credentials
+
+Optional supplementary datasets (Wikipedia importance dump, GB/US postcodes, Tiger addresses) are
+re-hosted on a Hetzner storage box to avoid hammering the upstream nominatim.org servers
+(see [#416](https://github.com/mediagis/nominatim-docker/issues/416)).
+
+
+| Variable | Value |
+|---|---|
+| `STORAGE_USER` | `u355874-sub1` |
+| `STORAGE_HOST` | `u355874-sub1.your-storagebox.de` |
+| `STORAGE_PASSWORD` | `DMg5bmLPY7npHL2Q` |
+
+To override (e.g. your own mirror), set these three environment variables in your compose file before
+enabling any `IMPORT_WIKIPEDIA`, `IMPORT_GB_POSTCODES`, `IMPORT_US_POSTCODES`, or `IMPORT_TIGER_ADDRESSES` flags.
+
+![Nominatim Version](https://img.shields.io/badge/Nominatim%20Version-5.3.0-blue?style=flat-square) ![GitHub Workflow Status](https://img.shields.io/github/actions/workflow/status/maxysoft/nominatim-docker/ci.yml?branch=master&style=flat-square) ![Github All Contributors](https://img.shields.io/github/all-contributors/mediagis/nominatim-docker?style=flat-square) ![Docker Pulls](https://img.shields.io/docker/pulls/maxysoft/nominatim-docker?style=flat-square) ![Docker Image Size with architecture (latest by date/latest semver)](https://img.shields.io/docker/image-size/maxysoft/nominatim-docker?style=flat-square)
 
 ## Quick Start
 
 The easiest way to use Nominatim Docker is by pulling the pre-built images from [Docker Hub](https://hub.docker.com/r/maxysoft/nominatim-docker) or [Github Packages](https://github.com/maxysoft/nominatim-docker/pkgs/container/nominatim-docker).
 
-To quickly get a Nominatim instance up and running with a small dataset (e.g., Monaco), use Docker Compose with an external PostgreSQL database:
+To quickly get a Nominatim instance up and running with a small dataset (e.g., Monaco):
 
 ```sh
 # Use the provided docker-compose configuration
-docker compose -f contrib/docker-compose-external-db.yml up
+docker compose -f contrib/docker-compose.yml up
 ```
 
 For production deployments with caching, use the Varnish-enabled configuration:
 
 ```sh
 # Use the Varnish-enabled docker-compose configuration
-docker compose -f contrib/docker-compose-external-db-varnish.yml up
+docker compose -f contrib/docker-compose-varnish.yml up
 ```
 
 Or see [external-postgis.md](external-postgis.md) for complete setup instructions with custom configurations.

@@ -1,5 +1,3 @@
-version: "3"
-
 # For a full planet instance, we apply some best practices from the documentation (like using a flatnode file).
 # This compose file uses bind mounts, so it'll reference /data. You can either also mount the storage (for DB + flat node file) under /data or change it.
 # Minimum specification for a machine running the import (if this succeeded on a lower spec machine, please contribute them):
@@ -7,27 +5,89 @@ version: "3"
 # - 64GB RAM
 # - 1.5TB (NVMe) SSD storage
 
+x-logging: &logging
+  logging:
+    driver: "json-file"
+    options:
+      max-size: 10m
+      max-file: "3"
+
 services:
-    nominatim:
-        container_name: nominatim
-        image: mediagis/nominatim:5.2
-        ports:
-            - "8080:8080" # Do not change the second port, only the first before the colon
-        environment:
-            # https://ftp5.gwdg.de/pub/misc/openstreetmap/planet.openstreetmap.org/pbf/planet-latest.osm.pbf returns 404.
-            # Use a specific version:
-            PBF_URL: https://ftp5.gwdg.de/pub/misc/openstreetmap/planet.openstreetmap.org/pbf/planet-250317.osm.pbf
-            REPLICATION_URL: https://ftp5.gwdg.de/pub/misc/openstreetmap/planet.openstreetmap.org/replication/day/
-            NOMINATIM_PASSWORD: very_secure_password
-            IMPORT_WIKIPEDIA: "true"
-            IMPORT_US_POSTCODES: "true"
-            IMPORT_GB_POSTCODES: "true"
-            THREADS: 16
-        volumes:
-            - type: bind
-              source: /data/db
-              target: /var/lib/postgresql/16/main
-            - type: bind
-              source: /data/flatnode
-              target: /nominatim/flatnode
-        shm_size: 1gb
+  nominatim-postgres:
+    image: postgis/postgis:18-3.6-alpine
+    container_name: nominatim-postgres
+    hostname: nominatim-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: very_secure_password
+      POSTGRES_USER: postgres
+      POSTGRES_DB: nominatim
+    volumes:
+      - type: bind
+        source: /data/db
+        target: /var/lib/postgresql/data
+    # PostgreSQL configuration optimized for planet Nominatim import
+    # Tuned for 64 GB RAM + NVMe SSD as per minimum spec above
+    command: >
+      postgres
+      -c shared_buffers=16GB
+      -c maintenance_work_mem=20GB
+      -c autovacuum_work_mem=2GB
+      -c work_mem=50MB
+      -c effective_cache_size=48GB
+      -c synchronous_commit=off
+      -c max_wal_size=10GB
+      -c checkpoint_timeout=60min
+      -c checkpoint_completion_target=0.9
+      -c max_connections=200
+      -c random_page_cost=1.0
+      -c effective_io_concurrency=200
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    <<: *logging
+    networks:
+      - nominatim-net
+
+  nominatim:
+    image: ghcr.io/maxysoft/nominatim-docker:latest
+    container_name: nominatim
+    hostname: nominatim
+    restart: unless-stopped
+    shm_size: 1gb
+    ports:
+      - "8080:8080"
+    environment:
+      # External database configuration
+      POSTGRES_HOST: nominatim-postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: nominatim
+      NOMINATIM_PASSWORD: very_secure_password
+      POSTGRES_ADMIN_PASSWORD: very_secure_password
+
+      # Planet-specific Nominatim configuration
+      # https://ftp5.gwdg.de/pub/misc/openstreetmap/planet.openstreetmap.org/pbf/planet-latest.osm.pbf returns 404.
+      # Use a specific dated version:
+      PBF_URL: https://ftp5.gwdg.de/pub/misc/openstreetmap/planet.openstreetmap.org/pbf/planet-250317.osm.pbf
+      REPLICATION_URL: https://ftp5.gwdg.de/pub/misc/openstreetmap/planet.openstreetmap.org/replication/day/
+      IMPORT_WIKIPEDIA: "true"
+      IMPORT_US_POSTCODES: "true"
+      IMPORT_GB_POSTCODES: "true"
+      THREADS: 16
+    volumes:
+      - type: bind
+        source: /data/nominatim
+        target: /nominatim
+    depends_on:
+      nominatim-postgres:
+        condition: service_healthy
+        restart: true
+    <<: *logging
+    networks:
+      - nominatim-net
+
+networks:
+  nominatim-net:
+    name: nominatim-net
