@@ -15,7 +15,7 @@ jobs:
       NOMINATIM_VERSION: ${{ steps.get_version.outputs.NOMINATIM_VERSION }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -25,14 +25,14 @@ jobs:
         run: echo "NOMINATIM_VERSION=$(grep -oP '(?<=ARG NOMINATIM_VERSION=)[0-9.]+' Dockerfile)" >> $GITHUB_OUTPUT
 
       - name: Build and export image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           tags: nominatim:${{ steps.get_version.outputs.NOMINATIM_VERSION }}
           outputs: type=docker,dest=/tmp/nominatim.tar
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: nominatim-${{ steps.get_version.outputs.NOMINATIM_VERSION }}
           path: /tmp/nominatim.tar
@@ -723,7 +723,7 @@ jobs:
     
     steps:
       - name: Download artifact
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           name: nominatim-${{ needs.build.outputs.NOMINATIM_VERSION }}
           path: /tmp
@@ -732,7 +732,7 @@ jobs:
           docker load --input /tmp/nominatim.tar
           docker image ls -a
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       # Excute the test scenario
       - name: ${{ matrix.test_scenario.name }}
@@ -751,7 +751,7 @@ jobs:
     
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -774,13 +774,13 @@ jobs:
 
       - name: Login to Docker Hub
         if: ${{ github.repository_owner == 'maxysoft' }}
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -788,7 +788,7 @@ jobs:
 
       - name: Build and push to Docker Hub
         if: ${{ github.repository_owner == 'maxysoft' }}
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           platforms: linux/amd64,linux/arm64
@@ -803,7 +803,7 @@ jobs:
             org.opencontainers.image.version=${{ steps.get_version.outputs.NOMINATIM_VERSION }}
 
       - name: Build and push to GitHub Container Registry
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           platforms: linux/amd64,linux/arm64
