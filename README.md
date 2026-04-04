@@ -2,6 +2,8 @@
 
 100% working container for [Nominatim](https://github.com/openstreetmap/Nominatim).
 
+![Nominatim Version](https://img.shields.io/badge/Nominatim%20Version-5.3.0-blue?style=flat-square) ![GitHub Workflow Status](https://img.shields.io/github/actions/workflow/status/maxysoft/nominatim-docker/ci.yml?branch=master&style=flat-square) ![Github All Contributors](https://img.shields.io/github/all-contributors/mediagis/nominatim-docker?style=flat-square) ![Docker Pulls](https://img.shields.io/docker/pulls/maxysoft/nominatim-docker?style=flat-square) ![Docker Image Size with architecture (latest by date/latest semver)](https://img.shields.io/docker/image-size/maxysoft/nominatim-docker?style=flat-square)
+
 > [!IMPORTANT]  
 > ⚠️ The following code modifications and implementations were generated with the assistance of **AI (Microsoft Copilot)**.  
 > Please review carefully before using in production.
@@ -27,8 +29,6 @@ re-hosted on a Hetzner storage box to avoid hammering the upstream nominatim.org
 
 To override (e.g. your own mirror), set these three environment variables in your compose file before
 enabling any `IMPORT_WIKIPEDIA`, `IMPORT_GB_POSTCODES`, `IMPORT_US_POSTCODES`, or `IMPORT_TIGER_ADDRESSES` flags.
-
-![Nominatim Version](https://img.shields.io/badge/Nominatim%20Version-5.3.0-blue?style=flat-square) ![GitHub Workflow Status](https://img.shields.io/github/actions/workflow/status/maxysoft/nominatim-docker/ci.yml?branch=master&style=flat-square) ![Github All Contributors](https://img.shields.io/github/all-contributors/mediagis/nominatim-docker?style=flat-square) ![Docker Pulls](https://img.shields.io/docker/pulls/maxysoft/nominatim-docker?style=flat-square) ![Docker Image Size with architecture (latest by date/latest semver)](https://img.shields.io/docker/image-size/maxysoft/nominatim-docker?style=flat-square)
 
 ## Quick Start
 

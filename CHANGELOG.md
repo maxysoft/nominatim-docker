@@ -25,6 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and replace mediagis image
 - Fix POSTGRES_HOST typo in docker-compose.yml (postgres → nominatim-postgres)
 - Default docker-compose.yml now use postgis-18 image
+- Removed uvicorn as not required anymore by nominatim
+- Fix gunicorn using the /root folder instead of /home/nominatim
 
 ## [2025/10/13]
 
