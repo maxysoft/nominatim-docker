@@ -144,6 +144,7 @@ sudo -E -u nominatim gunicorn \
   --daemon \
   --enable-stdio-inheritance \
   --worker-class asgi \
+  --worker-tmp-dir /tmp \
   --access-logfile - \
   "nominatim_api.server.falcon.server:run_wsgi()"
 

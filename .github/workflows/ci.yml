@@ -58,14 +58,19 @@ jobs:
                 -e POSTGRES_PASSWORD=very_secure_password \
                 -e POSTGRES_USER=postgres \
                 -e POSTGRES_DB=nominatim \
-                postgis/postgis:16-3.4
+                postgis/postgis:18-3.6-alpine
               
-              # Wait for PostgreSQL to be ready
-              sleep 10
+              # Wait for PostgreSQL to be ready (matches docker-compose healthcheck)
+              until docker exec postgres pg_isready -U postgres >/dev/null 2>&1; do
+                echo "Waiting for PostgreSQL..."
+                sleep 2
+              done
+              echo "PostgreSQL is ready"
               
               # get the data from four days ago to make sure there really are updates to apply
               four_days_ago=`date --date="4 days ago" +%y%m%d`
               docker run -i --rm --network nominatim-net \
+                --shm-size 1g \
                 -e POSTGRES_HOST=postgres \
                 -e POSTGRES_PORT=5432 \
                 -e POSTGRES_DB=nominatim \
@@ -79,6 +84,7 @@ jobs:
                 nominatim:$NOMINATIM_VERSION &
 
               ./assert-non-empty-json "http://localhost:8001/search.php?q=avenue%20pasteur"
+              ./assert-non-empty-json "http://localhost:8001/status.php?format=json"
               docker exec -i nominatim sudo -u nominatim nominatim replication --project-dir /nominatim --once
               ./assert-non-empty-json "http://localhost:8001/search.php?q=avenue%20pasteur"
               
@@ -94,11 +100,17 @@ jobs:
                 -e POSTGRES_PASSWORD=very_secure_password \
                 -e POSTGRES_USER=postgres \
                 -e POSTGRES_DB=nominatim \
-                postgis/postgis:16-3.4
+                postgis/postgis:18-3.6-alpine
               
-              sleep 10
+              # Wait for PostgreSQL to be ready (matches docker-compose healthcheck)
+              until docker exec postgres pg_isready -U postgres >/dev/null 2>&1; do
+                echo "Waiting for PostgreSQL..."
+                sleep 2
+              done
+              echo "PostgreSQL is ready"
               
               docker run -i --rm --network nominatim-net2 \
+                --shm-size 1g \
                 -e POSTGRES_HOST=postgres \
                 -e POSTGRES_PORT=5432 \
                 -e POSTGRES_DB=nominatim \
@@ -108,12 +120,14 @@ jobs:
                 -e REPLICATION_URL=http://download.geofabrik.de/europe/monaco-updates/ \
                 -v nominatim-data2:/nominatim \
                 -p 8002:8080 \
+                --name nominatim \
                 nominatim:$NOMINATIM_VERSION &
 
               ./assert-non-empty-json "http://localhost:8002/search.php?q=avenue%20pasteur"
+              ./assert-non-empty-json "http://localhost:8002/status.php?format=json"
               
               # Cleanup
-              docker stop postgres || true
+              docker stop nominatim postgres || true
               docker network rm nominatim-net2 || true
           
           - name: Import with persistent data and container restart
@@ -125,13 +139,19 @@ jobs:
                 -e POSTGRES_USER=postgres \
                 -e POSTGRES_DB=nominatim \
                 -v postgres-data:/var/lib/postgresql/data \
-                postgis/postgis:16-3.4
+                postgis/postgis:18-3.6-alpine
               
-              sleep 10
+              # Wait for PostgreSQL to be ready (matches docker-compose healthcheck)
+              until docker exec postgres pg_isready -U postgres >/dev/null 2>&1; do
+                echo "Waiting for PostgreSQL..."
+                sleep 2
+              done
+              echo "PostgreSQL is ready"
               
               # get the data from four days ago to make sure there really are updates to apply
               four_days_ago=`date --date="4 days ago" +%y%m%d`
               docker run -i --rm --network nominatim-net3 \
+                --shm-size 1g \
                 -e POSTGRES_HOST=postgres \
                 -e POSTGRES_PORT=5432 \
                 -e POSTGRES_DB=nominatim \
@@ -145,6 +165,7 @@ jobs:
                 nominatim:$NOMINATIM_VERSION &
 
               ./assert-non-empty-json "http://localhost:8003/search.php?q=avenue%20pasteur"
+              ./assert-non-empty-json "http://localhost:8003/status.php?format=json"
               
               # Stop containers
               docker stop nominatim
@@ -153,6 +174,7 @@ jobs:
 
               # Start nominatim again with same database
               docker run -i --rm --network nominatim-net3 \
+                --shm-size 1g \
                 -e POSTGRES_HOST=postgres \
                 -e POSTGRES_PORT=5432 \
                 -e POSTGRES_DB=nominatim \
@@ -182,13 +204,19 @@ jobs:
                 -e POSTGRES_USER=postgres \
                 -e POSTGRES_DB=nominatim \
                 -v postgres-data-update1:/var/lib/postgresql/data \
-                postgis/postgis:16-3.4
+                postgis/postgis:18-3.6-alpine
               
-              sleep 10
+              # Wait for PostgreSQL to be ready (matches docker-compose healthcheck)
+              until docker exec postgres pg_isready -U postgres >/dev/null 2>&1; do
+                echo "Waiting for PostgreSQL..."
+                sleep 2
+              done
+              echo "PostgreSQL is ready"
               
               # get the data from four days ago to make sure there really are updates to apply
               four_days_ago=`date --date="4 days ago" +%y%m%d`
               docker run -i --rm --network nominatim-net-update1 \
+                --shm-size 1g \
                 -e POSTGRES_HOST=postgres \
                 -e POSTGRES_PORT=5432 \
                 -e POSTGRES_DB=nominatim \
@@ -203,6 +231,7 @@ jobs:
                 nominatim:$NOMINATIM_VERSION &
 
               ./assert-non-empty-json "http://localhost:8020/search.php?q=avenue%20pasteur"
+              ./assert-non-empty-json "http://localhost:8020/status.php?format=json"
               echo -n "check replication log for Update completed. Count:"
               docker exec nominatim /bin/bash -c 'tail -f /var/log/replication.log | grep -m 1 -c "Update completed." '
               
@@ -219,13 +248,19 @@ jobs:
                 -e POSTGRES_USER=postgres \
                 -e POSTGRES_DB=nominatim \
                 -v postgres-data-update2:/var/lib/postgresql/data \
-                postgis/postgis:16-3.4
+                postgis/postgis:18-3.6-alpine
               
-              sleep 10
+              # Wait for PostgreSQL to be ready (matches docker-compose healthcheck)
+              until docker exec postgres pg_isready -U postgres >/dev/null 2>&1; do
+                echo "Waiting for PostgreSQL..."
+                sleep 2
+              done
+              echo "PostgreSQL is ready"
               
               # get the data from few days ago to make sure there really are updates to apply
               days_ago=`date --date="4 days ago" +%y%m%d`
               docker run -i --rm --network nominatim-net-update2 \
+                --shm-size 1g \
                 -e POSTGRES_HOST=postgres \
                 -e POSTGRES_PORT=5432 \
                 -e POSTGRES_DB=nominatim \
@@ -240,6 +275,7 @@ jobs:
                 nominatim:$NOMINATIM_VERSION &
 
               ./assert-non-empty-json "http://localhost:8021/search.php?q=avenue%20pasteur"
+              ./assert-non-empty-json "http://localhost:8021/status.php?format=json"
               echo -n "check replication log for Update completed. Count:"
               docker exec nominatim /bin/bash -c 'tail -f /var/log/replication.log | grep -m 1 -c "Update completed." '
               
@@ -255,11 +291,17 @@ jobs:
                 -e POSTGRES_PASSWORD=very_secure_password \
                 -e POSTGRES_USER=postgres \
                 -e POSTGRES_DB=nominatim \
-                postgis/postgis:16-3.4
+                postgis/postgis:18-3.6-alpine
               
-              sleep 10
+              # Wait for PostgreSQL to be ready (matches docker-compose healthcheck)
+              until docker exec postgres pg_isready -U postgres >/dev/null 2>&1; do
+                echo "Waiting for PostgreSQL..."
+                sleep 2
+              done
+              echo "PostgreSQL is ready"
               
               docker run -i --rm --network nominatim-net4 \
+                --shm-size 1g \
                 -e POSTGRES_HOST=postgres \
                 -e POSTGRES_PORT=5432 \
                 -e POSTGRES_DB=nominatim \
@@ -270,12 +312,14 @@ jobs:
                 -e IMPORT_STYLE=full \
                 -v nominatim-data4:/nominatim \
                 -p 8005:8080 \
+                --name nominatim \
                 nominatim:$NOMINATIM_VERSION &
 
               ./assert-non-empty-json "http://localhost:8005/search.php?q=hotel%20de%20paris"
+              ./assert-non-empty-json "http://localhost:8005/status.php?format=json"
               
               # Cleanup
-              docker stop postgres || true
+              docker stop nominatim postgres || true
               docker network rm nominatim-net4 || true
           
           - name: Import admin style
@@ -286,11 +330,17 @@ jobs:
                 -e POSTGRES_PASSWORD=very_secure_password \
                 -e POSTGRES_USER=postgres \
                 -e POSTGRES_DB=nominatim \
-                postgis/postgis:16-3.4
+                postgis/postgis:18-3.6-alpine
               
-              sleep 10
+              # Wait for PostgreSQL to be ready (matches docker-compose healthcheck)
+              until docker exec postgres pg_isready -U postgres >/dev/null 2>&1; do
+                echo "Waiting for PostgreSQL..."
+                sleep 2
+              done
+              echo "PostgreSQL is ready"
               
               docker run -i --rm --network nominatim-net5 \
+                --shm-size 1g \
                 -e POSTGRES_HOST=postgres \
                 -e POSTGRES_PORT=5432 \
                 -e POSTGRES_DB=nominatim \
@@ -301,12 +351,14 @@ jobs:
                 -e IMPORT_STYLE=admin \
                 -v nominatim-data5:/nominatim \
                 -p 8006:8080 \
+                --name nominatim \
                 nominatim:$NOMINATIM_VERSION &
 
               ./assert-empty-json "http://localhost:8006/search.php?q=hotel%20de%20paris"
+              ./assert-non-empty-json "http://localhost:8006/status.php?format=json"
               
               # Cleanup
-              docker stop postgres || true
+              docker stop nominatim postgres || true
               docker network rm nominatim-net5 || true
 
           - name: Import with PBF_PATH
@@ -317,12 +369,18 @@ jobs:
                 -e POSTGRES_PASSWORD=very_secure_password \
                 -e POSTGRES_USER=postgres \
                 -e POSTGRES_DB=nominatim \
-                postgis/postgis:16-3.4
+                postgis/postgis:18-3.6-alpine
               
-              sleep 10
+              # Wait for PostgreSQL to be ready (matches docker-compose healthcheck)
+              until docker exec postgres pg_isready -U postgres >/dev/null 2>&1; do
+                echo "Waiting for PostgreSQL..."
+                sleep 2
+              done
+              echo "PostgreSQL is ready"
               
               wget --cut-dirs=1 -nH -xP /tmp/data http://download.geofabrik.de/europe/monaco-latest.osm.pbf
               docker run -i --rm --network nominatim-net6 \
+                --shm-size 1g \
                 -e POSTGRES_HOST=postgres \
                 -e POSTGRES_PORT=5432 \
                 -e POSTGRES_DB=nominatim \
@@ -337,6 +395,7 @@ jobs:
                 nominatim:$NOMINATIM_VERSION &
 
               ./assert-non-empty-json "http://localhost:8007/search.php?q=avenue%20pasteur"
+              ./assert-non-empty-json "http://localhost:8007/status.php?format=json"
               
               # Cleanup
               docker stop nominatim postgres || true
@@ -350,11 +409,17 @@ jobs:
                 -e POSTGRES_PASSWORD=very_secure_password \
                 -e POSTGRES_USER=postgres \
                 -e POSTGRES_DB=nominatim \
-                postgis/postgis:16-3.4
+                postgis/postgis:18-3.6-alpine
               
-              sleep 10
+              # Wait for PostgreSQL to be ready (matches docker-compose healthcheck)
+              until docker exec postgres pg_isready -U postgres >/dev/null 2>&1; do
+                echo "Waiting for PostgreSQL..."
+                sleep 2
+              done
+              echo "PostgreSQL is ready"
               
               docker run -i --rm --network nominatim-net7 \
+                --shm-size 1g \
                 -e POSTGRES_HOST=postgres \
                 -e POSTGRES_PORT=5432 \
                 -e POSTGRES_DB=nominatim \
@@ -363,12 +428,14 @@ jobs:
                 -e PBF_URL=http://download.geofabrik.de/europe/monaco-latest.osm.pbf \
                 -v nominatim-data7:/nominatim \
                 -p 8008:8080 \
+                --name nominatim \
                 nominatim:$NOMINATIM_VERSION &
 
               ./assert-non-empty-json "http://localhost:8008/search.php?q=avenue%20pasteur"
+              ./assert-non-empty-json "http://localhost:8008/status.php?format=json"
               
               # Cleanup
-              docker stop postgres || true
+              docker stop nominatim postgres || true
               docker network rm nominatim-net7 || true
 
           - name: FREEZE
@@ -379,11 +446,17 @@ jobs:
                 -e POSTGRES_PASSWORD=very_secure_password \
                 -e POSTGRES_USER=postgres \
                 -e POSTGRES_DB=nominatim \
-                postgis/postgis:16-3.4
+                postgis/postgis:18-3.6-alpine
               
-              sleep 10
+              # Wait for PostgreSQL to be ready (matches docker-compose healthcheck)
+              until docker exec postgres pg_isready -U postgres >/dev/null 2>&1; do
+                echo "Waiting for PostgreSQL..."
+                sleep 2
+              done
+              echo "PostgreSQL is ready"
               
               docker run -i --rm --network nominatim-net8 \
+                --shm-size 1g \
                 -e POSTGRES_HOST=postgres \
                 -e POSTGRES_PORT=5432 \
                 -e POSTGRES_DB=nominatim \
@@ -393,12 +466,14 @@ jobs:
                 -e FREEZE="true" \
                 -v nominatim-data8:/nominatim \
                 -p 8009:8080 \
+                --name nominatim \
                 nominatim:$NOMINATIM_VERSION &
 
               ./assert-non-empty-json "http://localhost:8009/search.php?q=avenue%20pasteur"
+              ./assert-non-empty-json "http://localhost:8009/status.php?format=json"
               
               # Cleanup
-              docker stop postgres || true
+              docker stop nominatim postgres || true
               docker network rm nominatim-net8 || true
 
           - name: GB postcode import
@@ -409,11 +484,17 @@ jobs:
                 -e POSTGRES_PASSWORD=very_secure_password \
                 -e POSTGRES_USER=postgres \
                 -e POSTGRES_DB=nominatim \
-                postgis/postgis:16-3.4
+                postgis/postgis:18-3.6-alpine
               
-              sleep 10
+              # Wait for PostgreSQL to be ready (matches docker-compose healthcheck)
+              until docker exec postgres pg_isready -U postgres >/dev/null 2>&1; do
+                echo "Waiting for PostgreSQL..."
+                sleep 2
+              done
+              echo "PostgreSQL is ready"
               
               docker run -i --rm --network nominatim-net9 \
+                --shm-size 1g \
                 -e POSTGRES_HOST=postgres \
                 -e POSTGRES_PORT=5432 \
                 -e POSTGRES_DB=nominatim \
@@ -423,14 +504,16 @@ jobs:
                 -e IMPORT_GB_POSTCODES="true" \
                 -v nominatim-data9:/nominatim \
                 -p 8010:8080 \
+                --name nominatim \
                 nominatim:$NOMINATIM_VERSION &
 
               ./assert-non-empty-json "http://localhost:8010/search.php?postalcode=LE15+8TX"
+              ./assert-non-empty-json "http://localhost:8010/status.php?format=json"
               ./assert-non-empty-json "http://localhost:8010/search.php?postalcode=PE9+3SY"
               ./assert-non-empty-json "http://localhost:8010/search.php?postalcode=PE9+4ES"
               
               # Cleanup
-              docker stop postgres || true
+              docker stop nominatim postgres || true
               docker network rm nominatim-net9 || true
   
           - name: REVERSE_ONLY
@@ -441,11 +524,17 @@ jobs:
                 -e POSTGRES_PASSWORD=very_secure_password \
                 -e POSTGRES_USER=postgres \
                 -e POSTGRES_DB=nominatim \
-                postgis/postgis:16-3.4
+                postgis/postgis:18-3.6-alpine
               
-              sleep 10
+              # Wait for PostgreSQL to be ready (matches docker-compose healthcheck)
+              until docker exec postgres pg_isready -U postgres >/dev/null 2>&1; do
+                echo "Waiting for PostgreSQL..."
+                sleep 2
+              done
+              echo "PostgreSQL is ready"
               
               docker run -i --rm --network nominatim-net10 \
+                --shm-size 1g \
                 -e POSTGRES_HOST=postgres \
                 -e POSTGRES_PORT=5432 \
                 -e POSTGRES_DB=nominatim \
@@ -455,12 +544,14 @@ jobs:
                 -e REVERSE_ONLY="true" \
                 -v nominatim-data10:/nominatim \
                 -p 8011:8080 \
+                --name nominatim \
                 nominatim:$NOMINATIM_VERSION &
 
               ./assert-non-empty-json "http://localhost:8011/reverse.php?lat=43.734&lon=7.42&format=jsonv2"
+              ./assert-non-empty-json "http://localhost:8011/status.php?format=json"
               
               # Cleanup
-              docker stop postgres || true
+              docker stop nominatim postgres || true
               docker network rm nominatim-net10 || true
           
           - name: Check for clean shutdown
@@ -471,11 +562,17 @@ jobs:
                 -e POSTGRES_PASSWORD=very_secure_password \
                 -e POSTGRES_USER=postgres \
                 -e POSTGRES_DB=nominatim \
-                postgis/postgis:16-3.4
+                postgis/postgis:18-3.6-alpine
               
-              sleep 10
+              # Wait for PostgreSQL to be ready (matches docker-compose healthcheck)
+              until docker exec postgres pg_isready -U postgres >/dev/null 2>&1; do
+                echo "Waiting for PostgreSQL..."
+                sleep 2
+              done
+              echo "PostgreSQL is ready"
               
               docker run --detach --network nominatim-net11 \
+                --shm-size 1g \
                 -e POSTGRES_HOST=postgres \
                 -e POSTGRES_PORT=5432 \
                 -e POSTGRES_DB=nominatim \
@@ -488,6 +585,7 @@ jobs:
                 nominatim:$NOMINATIM_VERSION
             
               ./assert-non-empty-json "http://localhost:8012/search.php?q=avenue%20pasteur"
+              ./assert-non-empty-json "http://localhost:8012/status.php?format=json"
               # Shutdown the container
               docker stop -t 60 nominatim
               # Verify that the exit code is zero
@@ -507,11 +605,17 @@ jobs:
                 -e POSTGRES_PASSWORD=very_secure_password \
                 -e POSTGRES_USER=postgres \
                 -e POSTGRES_DB=nominatim \
-                postgis/postgis:16-3.4
+                postgis/postgis:18-3.6-alpine
               
-              sleep 10
+              # Wait for PostgreSQL to be ready (matches docker-compose healthcheck)
+              until docker exec postgres pg_isready -U postgres >/dev/null 2>&1; do
+                echo "Waiting for PostgreSQL..."
+                sleep 2
+              done
+              echo "PostgreSQL is ready"
               
               docker run -i --rm --network nominatim-net12 \
+                --shm-size 1g \
                 -e POSTGRES_HOST=postgres \
                 -e POSTGRES_PORT=5432 \
                 -e POSTGRES_DB=nominatim \
@@ -525,6 +629,7 @@ jobs:
                 nominatim:$NOMINATIM_VERSION &
 
               ./assert-non-empty-json "http://localhost:8013/search.php?q=avenue%20pasteur"
+              ./assert-non-empty-json "http://localhost:8013/status.php?format=json"
               docker logs nominatim | grep "Warming finished"
               
               # Cleanup
@@ -539,11 +644,17 @@ jobs:
                 -e POSTGRES_PASSWORD=very_secure_password \
                 -e POSTGRES_USER=postgres \
                 -e POSTGRES_DB=nominatim \
-                postgis/postgis:16-3.4
+                postgis/postgis:18-3.6-alpine
               
-              sleep 10
+              # Wait for PostgreSQL to be ready (matches docker-compose healthcheck)
+              until docker exec postgres pg_isready -U postgres >/dev/null 2>&1; do
+                echo "Waiting for PostgreSQL..."
+                sleep 2
+              done
+              echo "PostgreSQL is ready"
               
               docker run -i --rm --network nominatim-net13 \
+                --shm-size 1g \
                 -e POSTGRES_HOST=postgres \
                 -e POSTGRES_PORT=5432 \
                 -e POSTGRES_DB=nominatim \
@@ -557,11 +668,58 @@ jobs:
                 nominatim:$NOMINATIM_VERSION &
 
               ./assert-non-empty-json "http://localhost:8014/search.php?q=avenue%20pasteur"
+              ./assert-non-empty-json "http://localhost:8014/status.php?format=json"
               docker logs nominatim | grep "Skipping cache warmup"
               
               # Cleanup
-              docker stop postgres || true
+              docker stop nominatim postgres || true
               docker network rm nominatim-net13 || true
+
+          - name: API endpoints coverage
+            commands: |-
+              # Start PostgreSQL with PostGIS (same image as docker-compose.yml)
+              docker network create nominatim-net14
+              docker run -d --rm --name postgres --network nominatim-net14 \
+                -e POSTGRES_PASSWORD=very_secure_password \
+                -e POSTGRES_USER=postgres \
+                -e POSTGRES_DB=nominatim \
+                postgis/postgis:18-3.6-alpine
+              
+              # Wait for PostgreSQL to be ready (matches docker-compose healthcheck)
+              until docker exec postgres pg_isready -U postgres >/dev/null 2>&1; do
+                echo "Waiting for PostgreSQL..."
+                sleep 2
+              done
+              echo "PostgreSQL is ready"
+              
+              docker run -i --rm --network nominatim-net14 \
+                --shm-size 1g \
+                -e POSTGRES_HOST=postgres \
+                -e POSTGRES_PORT=5432 \
+                -e POSTGRES_DB=nominatim \
+                -e NOMINATIM_PASSWORD=very_secure_password \
+                -e POSTGRES_ADMIN_PASSWORD=very_secure_password \
+                -e PBF_URL=http://download.geofabrik.de/europe/monaco-latest.osm.pbf \
+                -e REPLICATION_URL=http://download.geofabrik.de/europe/monaco-updates/ \
+                -v nominatim-data14:/nominatim \
+                -p 8015:8080 \
+                --name nominatim \
+                nominatim:$NOMINATIM_VERSION &
+
+              # /status endpoint
+              ./assert-non-empty-json "http://localhost:8015/status.php?format=json"
+              # /search endpoint
+              ./assert-non-empty-json "http://localhost:8015/search.php?q=avenue%20pasteur"
+              # /reverse endpoint
+              ./assert-non-empty-json "http://localhost:8015/reverse.php?lat=43.734&lon=7.42&format=json"
+              # /lookup endpoint (Avenue Pasteur OSM way)
+              ./assert-non-empty-json "http://localhost:8015/lookup.php?osm_ids=W201009264&format=json"
+              # Run database health check inside the container
+              docker exec nominatim sudo -u nominatim nominatim admin --check-database --project-dir /nominatim
+              
+              # Cleanup
+              docker stop nominatim postgres || true
+              docker network rm nominatim-net14 || true
     
     steps:
       - name: Download artifact
