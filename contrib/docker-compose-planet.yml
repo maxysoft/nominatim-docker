@@ -14,7 +14,7 @@ x-logging: &logging
 
 services:
   nominatim-postgres:
-    image: postgis/postgis:18-3.6-alpine
+    image: postgis/postgis:18-3.6-alpine@sha256:dd5cbfb841cb3572ddabeb949c6b7649edf320a8dc960d7e049ec535c2631a54
     container_name: nominatim-postgres
     hostname: nominatim-postgres
     restart: unless-stopped
@@ -25,23 +25,15 @@ services:
     volumes:
       - type: bind
         source: /data/db
-        target: /var/lib/postgresql/data
+        target: /var/lib/postgresql
+      - type: bind
+        source: ./contrib/postgres/planet-postgresql.conf
+        target: /etc/postgresql/postgresql.conf
+        read_only: true
     # PostgreSQL configuration optimized for planet Nominatim import
     # Tuned for 64 GB RAM + NVMe SSD as per minimum spec above
     command: >
-      postgres
-      -c shared_buffers=16GB
-      -c maintenance_work_mem=20GB
-      -c autovacuum_work_mem=2GB
-      -c work_mem=50MB
-      -c effective_cache_size=48GB
-      -c synchronous_commit=off
-      -c max_wal_size=10GB
-      -c checkpoint_timeout=60min
-      -c checkpoint_completion_target=0.9
-      -c max_connections=200
-      -c random_page_cost=1.0
-      -c effective_io_concurrency=200
+      postgres -c config_file=/etc/postgresql/postgresql.conf
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s

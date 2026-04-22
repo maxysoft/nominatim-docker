@@ -4,7 +4,8 @@ This Docker Compose configuration provides a production-ready setup for Nominati
 
 ## Overview
 
-The `docker-compose-external-db-varnish.yml` configuration includes:
+The `docker-compose-varnish.yml` configuration includes:
+
 - PostgreSQL with PostGIS (internal, not exposed)
 - Nominatim API server (internal, not exposed)
 - Varnish 8 cache server (exposed on port 80)
@@ -12,6 +13,7 @@ The `docker-compose-external-db-varnish.yml` configuration includes:
 ## Key Features
 
 ### Security
+
 - Only port 80 is exposed to the outside world (Varnish)
 - PostgreSQL (5432) and Nominatim (8080) are not exposed, improving security
 - Varnish filters requests to only allow GET and HEAD methods
@@ -22,7 +24,7 @@ The `docker-compose-external-db-varnish.yml` configuration includes:
 The Varnish configuration caches different Nominatim endpoints with appropriate TTLs for production use:
 
 | Endpoint | Cache Duration | Rationale |
-|----------|---------------|-----------|
+| ---------- | --------------- | ----------- |
 | `/search` | 1 hour | Search results are relatively stable |
 | `/reverse` | 6 hours | Reverse geocoding results are very stable |
 | `/lookup` | 24 hours | OSM ID lookups rarely change |
@@ -30,6 +32,7 @@ The Varnish configuration caches different Nominatim endpoints with appropriate 
 | `/status` | 1 minute | Status should be relatively fresh |
 
 ### Performance Features
+
 - Query string normalization (parameters are sorted for better cache hits)
 - Cookie removal (Nominatim doesn't use cookies)
 - Graceful degradation (serves stale content if backend is down)
@@ -41,7 +44,7 @@ The Varnish configuration caches different Nominatim endpoints with appropriate 
 ### Starting the Stack
 
 ```bash
-docker compose -f contrib/docker-compose-external-db-varnish.yml up
+docker compose -f contrib/docker-compose-varnish.yml up
 ```
 
 ### Accessing the API
@@ -85,7 +88,7 @@ docker exec nominatim-varnish varnishstat
 
 ## Configuration Files
 
-- `docker-compose-external-db-varnish.yml` - Main Docker Compose configuration
+- `docker-compose-varnish.yml` - Main Docker Compose configuration
 - `varnish.vcl` - Varnish Cache Language configuration defining caching rules
 
 ## Customization
@@ -104,7 +107,7 @@ if (bereq.url ~ "^/search" || bereq.url ~ "^/search\.php") {
 
 ### Adjusting Varnish Memory
 
-To change the amount of memory allocated to Varnish, edit `docker-compose-external-db-varnish.yml`:
+To change the amount of memory allocated to Varnish, edit `docker-compose-varnish.yml`:
 
 ```yaml
 varnish:
@@ -134,7 +137,7 @@ varnish:
    - Monitor cache hit rates with `varnishstat`
    - Aim for >80% cache hit rate
 
-3. **Security**: 
+3. **Security**:
    - Change default passwords in the configuration
    - Consider adding rate limiting
    - Use HTTPS with a reverse proxy (nginx, traefik) in front of Varnish
@@ -150,6 +153,7 @@ varnish:
 ### Varnish not starting
 
 Check VCL syntax:
+
 ```bash
 docker exec nominatim-varnish varnishd -C -f /etc/varnish/default.vcl
 ```
@@ -163,6 +167,7 @@ docker exec nominatim-varnish varnishd -C -f /etc/varnish/default.vcl
 ### Backend connection issues
 
 Check Nominatim is accessible from Varnish:
+
 ```bash
 docker exec nominatim-varnish wget -O- http://nominatim:8080/status.php
 ```

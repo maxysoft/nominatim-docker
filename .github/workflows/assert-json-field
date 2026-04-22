@@ -1,0 +1,67 @@
+#!/usr/bin/env python3
+
+# Validates that a specific field in a JSON response matches an expected regex pattern.
+#
+# Usage: ./assert-json-field URL field.subfield pattern
+#   URL            - The endpoint to request
+#   field.subfield - Dot-separated path into the JSON object (array responses use first element)
+#   pattern        - Regex pattern the field value must match
+#
+# Examples:
+#   ./assert-json-field "http://localhost/status.php?format=json" "status" "^0$"
+#   ./assert-json-field "http://localhost/search.php?q=Monaco&format=json&limit=1" "place_rank" "^4$"
+#   ./assert-json-field "http://localhost/search.php?q=Monaco&format=json&limit=1" "address.country" "Monaco"
+#
+# Retries with exponential backoff to handle slow container startup.
+
+import logging
+import requests
+import sys
+import json
+import re
+
+from requests.adapters import HTTPAdapter
+from requests.packages.urllib3.util.retry import Retry
+
+logging.basicConfig(level=logging.WARNING)
+
+if len(sys.argv) != 4:
+    print(f"Usage: {sys.argv[0]} URL field.path expected_pattern")
+    sys.exit(1)
+
+url, field_path, pattern = sys.argv[1], sys.argv[2], sys.argv[3]
+
+s = requests.Session()
+retries = Retry(total=7, backoff_factor=2, status_forcelist=[502, 503, 504])
+s.mount('http://', HTTPAdapter(max_retries=retries))
+
+resp = s.get(url)
+
+if resp.status_code != 200:
+    print(f'Endpoint returned status code {resp.status_code}: {resp.content}')
+    sys.exit(1)
+
+jsn = resp.json()
+
+# If response is an array, use the first element
+obj = jsn[0] if isinstance(jsn, list) else jsn
+
+# Traverse dot-separated path
+keys = field_path.split('.')
+val = obj
+for k in keys:
+    if isinstance(val, dict):
+        val = val.get(k)
+    else:
+        val = None
+    if val is None:
+        print(f'FAIL: field "{field_path}" not found in response')
+        print(json.dumps(jsn, indent=2))
+        sys.exit(1)
+
+if not re.search(pattern, str(val)):
+    print(f'FAIL: field "{field_path}" = "{val}" does not match pattern "{pattern}"')
+    print(json.dumps(jsn, indent=2))
+    sys.exit(1)
+
+print(f'✅ {field_path} = "{val}" matches "{pattern}"')

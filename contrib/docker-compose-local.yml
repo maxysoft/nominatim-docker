@@ -20,10 +20,10 @@ services:
         source: postgres-data
         target: /var/lib/postgresql
       - type: bind
-        source: ./contrib/postgres/16g-postgresql.conf
+        source: ./postgres/postgresql-local.conf
         target: /etc/postgresql/postgresql.conf
         read_only: true
-    # PostgreSQL configuration optimized for 16 GB RAM machine
+    # PostgreSQL configuration optimized for 512 MB RAM machine
     command: >
       postgres -c config_file=/etc/postgresql/postgresql.conf
     healthcheck:
@@ -36,9 +36,12 @@ services:
       - nominatim-net
 
   nominatim:
-    image: ghcr.io/maxysoft/nominatim-docker:latest
-    container_name: nominatim
-    hostname: nominatim
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: nominatim:local
+    container_name: nominatim-local
+    hostname: nominatim-local
     restart: unless-stopped
     shm_size: 1gb
     ports:

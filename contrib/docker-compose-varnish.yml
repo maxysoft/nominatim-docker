@@ -7,7 +7,7 @@ x-logging: &logging
 
 services:
   nominatim-postgres:
-    image: postgis/postgis:18-3.6-alpine
+    image: postgis/postgis:18-3.6-alpine@sha256:dd5cbfb841cb3572ddabeb949c6b7649edf320a8dc960d7e049ec535c2631a54
     container_name: nominatim-postgres
     hostname: nominatim-postgres
     restart: unless-stopped
@@ -16,20 +16,16 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_DB: nominatim
     volumes:
-      - postgres-data:/var/lib/postgresql/data
+      - type: volume
+        source: postgres-data
+        target: /var/lib/postgresql
+      - type: bind
+        source: ./contrib/postgres/postgresql.conf
+        target: /etc/postgresql/postgresql.conf
+        read_only: true
     # PostgreSQL configuration optimized for Nominatim
     command: >
-      postgres
-      -c shared_buffers=2GB
-      -c maintenance_work_mem=10GB
-      -c autovacuum_work_mem=2GB
-      -c work_mem=50MB
-      -c effective_cache_size=24GB
-      -c synchronous_commit=off
-      -c max_wal_size=2GB
-      -c checkpoint_timeout=10min
-      -c checkpoint_completion_target=0.9
-      -c max_connections=200
+      postgres -c config_file=/etc/postgresql/postgresql.conf
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
@@ -54,7 +50,7 @@ services:
       POSTGRES_ADMIN_PASSWORD: very_secure_password
       
       # Nominatim configuration
-      # see https://github.com/mediagis/nominatim-docker/tree/master/5.1#configuration for more options
+      # see https://github.com/maxysoft/nominatim-docker/tree/master/5.3#configuration for more options
       PBF_URL: https://download.geofabrik.de/europe/monaco-latest.osm.pbf
       REPLICATION_URL: https://download.geofabrik.de/europe/monaco-updates/
     volumes:
@@ -68,7 +64,7 @@ services:
       - nominatim-net
 
   nominatim-varnish:
-    image: varnish:8.0.1-alpine
+    image: varnish:8.0.1-alpine@sha256:0860b5e9f5535e373080f6921bdb68959dc93c300da569107cfedc45fe236e67
     container_name: nominatim-varnish
     hostname: nominatim-varnish
     restart: unless-stopped

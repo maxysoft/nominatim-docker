@@ -2,7 +2,7 @@
 
 100% working container for [Nominatim](https://github.com/openstreetmap/Nominatim).
 
-![Nominatim Version](https://img.shields.io/badge/Nominatim%20Version-5.3.0-blue?style=flat-square) ![GitHub Workflow Status](https://img.shields.io/github/actions/workflow/status/maxysoft/nominatim-docker/ci.yml?branch=master&style=flat-square) ![Github All Contributors](https://img.shields.io/github/all-contributors/mediagis/nominatim-docker?style=flat-square) ![Docker Pulls](https://img.shields.io/docker/pulls/maxysoft/nominatim-docker?style=flat-square) ![Docker Image Size with architecture (latest by date/latest semver)](https://img.shields.io/docker/image-size/maxysoft/nominatim-docker?style=flat-square)
+![Nominatim Version](https://img.shields.io/badge/Nominatim%20Version-5.3.2-blue?style=flat-square) ![GitHub Workflow Status](https://img.shields.io/github/actions/workflow/status/maxysoft/nominatim-docker/ci.yml?branch=master&style=flat-square) ![Github All Contributors](https://img.shields.io/github/all-contributors/mediagis/nominatim-docker?style=flat-square) ![Docker Pulls](https://img.shields.io/docker/pulls/maxysoft/nominatim-docker?style=flat-square) ![Docker Image Size with architecture (latest by date/latest semver)](https://img.shields.io/docker/image-size/maxysoft/nominatim-docker?style=flat-square)
 
 > [!IMPORTANT]  
 > ⚠️ The following code modifications and implementations were generated with the assistance of **AI (Microsoft Copilot)**.  
@@ -20,9 +20,8 @@ Optional supplementary datasets (Wikipedia importance dump, GB/US postcodes, Tig
 re-hosted on a Hetzner storage box to avoid hammering the upstream nominatim.org servers
 (see [#416](https://github.com/mediagis/nominatim-docker/issues/416)).
 
-
 | Variable | Value |
-|---|---|
+| --- | --- |
 | `STORAGE_USER` | `u355874-sub1` |
 | `STORAGE_HOST` | `u355874-sub1.your-storagebox.de` |
 | `STORAGE_PASSWORD` | `DMg5bmLPY7npHL2Q` |
@@ -54,7 +53,7 @@ After the import is complete, you can access the Nominatim API at `http://localh
 
 ## Accessing Different Versions
 
-You can pull specific versions of the Nominatim Docker image by specifying the tag. For example, to use Nominatim version `5.1`:
+You can pull specific versions of the Nominatim Docker image by specifying the tag. For example, to use Nominatim version `5.3`:
 
 ```sh
 docker pull ghcr.io/maxysoft/nominatim-docker:v5.1.0-9b75039
@@ -70,7 +69,7 @@ For information regarding the latest supported security version and security pol
 
 For comprehensive instructions on advanced configuration, importing custom PBF files, persistent data, updating the database, PostgreSQL tuning, and more, please refer to the [detailed how-to guide](howto.md).
 
-# Project goals and alternatives
+## Project goals and alternatives
 
 This project has been modified to provide better separation of concerns by using an external PostgreSQL/PostGIS database instead of running PostgreSQL inside the Nominatim container. This approach offers several advantages:
 
@@ -81,23 +80,25 @@ This project has been modified to provide better separation of concerns by using
 
 The trade-off is slightly more complex setup, but with better operational characteristics for production use.
 
-If you're looking for other projects with different architectures, check out https://github.com/smithmicro/n7m.
+If you're looking for other projects with different architectures, check out <https://github.com/smithmicro/n7m>.
 
-# Automated Builds
+## Automated Builds
 
 Docker images are automatically built and pushed to both Docker Hub and GitHub Container Registry on every merge to the master branch. Images are tagged with:
 
 **GitHub Container Registry (always available):**
+
 - `ghcr.io/maxysoft/nominatim-docker:v<version>-<commit-sha>` - Specific version and commit (e.g., `v5.1.0-84b3d22`)
 - `ghcr.io/maxysoft/nominatim-docker:latest` - Always points to the latest master build
 
 **Docker Hub (when secrets are configured):**
+
 - `maxysoft/nominatim-docker:v<version>-<commit-sha>` - Specific version and commit (e.g., `v5.1.0-84b3d22`)
 - `maxysoft/nominatim-docker:latest` - Always points to the latest master build
 
 This ensures every change is automatically available as a Docker image for testing and deployment, with GitHub Container Registry as the primary fallback when Docker Hub credentials are not available.
 
-# Contributors
+## Contributors
 
 Thanks goes to these wonderful people ([emoji key](https://allcontributors.org/docs/en/emoji-key)):
 

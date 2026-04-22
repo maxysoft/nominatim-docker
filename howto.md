@@ -1,4 +1,4 @@
-# Nominatim Docker (Nominatim version 5.1)
+# Nominatim Docker (Nominatim version 5.3)
 
 > **Note:** This version has been modified to use external PostgreSQL/PostGIS instead of running PostgreSQL inside the container. For setup instructions with external database, see [external-postgis.md](external-postgis.md).
 
@@ -9,7 +9,6 @@
   - [Automatic import](#automatic-import)
   - [Configuration](#configuration)
     - [General Parameters](#general-parameters)
-    - [PostgreSQL Tuning](#postgresql-tuning)
     - [Import Style](#import-style)
     - [Flatnode files](#flatnode-files)
     - [Configuration Example](#configuration-example)
@@ -39,7 +38,7 @@ docker run -it \
 
 Port 8080 is the nominatim HTTP API port and 5432 is the Postgres port, which you may or may not want to expose.
 
-If you want to check that your data import was successful, you can use the API with the following URL: http://localhost:8080/search?q=avenue%20pasteur
+If you want to check that your data import was successful, you can use the API with the following URL: <http://localhost:8080/search?q=avenue%20pasteur>
 
 ## Configuration
 
@@ -86,7 +85,7 @@ This version requires an external PostgreSQL database with PostGIS extension. Th
 - `NOMINATIM_PASSWORD`: Password for the Nominatim database users
 - `POSTGRES_ADMIN_PASSWORD` (default: same as `NOMINATIM_PASSWORD`): Password for the PostgreSQL admin user
 
-For PostgreSQL tuning, configure your external PostgreSQL server according to the [official Nominatim documentation](https://nominatim.org/release-docs/5.2/admin/Installation/#tuning-the-postgresql-database). 
+For PostgreSQL tuning, configure your external PostgreSQL server according to the [official Nominatim documentation](https://nominatim.org/release-docs/5.3/admin/Installation/#tuning-the-postgresql-database).
 
 See [external-postgis.md](external-postgis.md) for complete setup instructions and Docker Compose examples.
 
@@ -104,11 +103,11 @@ Available options are :
 - `full`: Default style that also includes points of interest.
 - `extratags`: Like the full style but also adds most of the OSM tags into the extratags column.
 
-See https://nominatim.org/release-docs/5.3/admin/Import/#filtering-imported-data for more details on those styles.
+See <https://nominatim.org/release-docs/5.3/admin/Import/#filtering-imported-data> for more details on those styles.
 
 ### Flatnode files
 
-In addition you can also mount a volume / bind-mount on `/nominatim/flatnode` (see: Persistent container data) to use flatnode storage. This is advised for bigger imports (Europe, North America etc.), see: https://nominatim.org/release-docs/5.3/admin/Import/#flatnode-files. If the mount is available for the container, the flatnode configuration is automatically set and used.
+In addition you can also mount a volume / bind-mount on `/nominatim/flatnode` (see: Persistent container data) to use flatnode storage. This is advised for bigger imports (Europe, North America etc.), see: <https://nominatim.org/release-docs/5.3/admin/Import/#flatnode-files>. If the mount is available for the container, the flatnode configuration is automatically set and used.
 
 ```sh
 docker run -it \
@@ -123,7 +122,6 @@ docker run -it \
 ### Configuration Example
 
 Here you can find a [configuration example](example.md) for all flags you can use for the container creation.
-
 
 ## Persistent container data
 
@@ -175,7 +173,7 @@ where the _/osm-maps/data/_ directory contains _monaco-latest.osm.pbf_ file that
 
 ## Updating the database
 
-Full documentation for Nominatim update available [here](https://nominatim.org/release-docs/5.3/admin/Update/). For a list of other methods see the output of:
+Full documentation for Nominatim update is available her: [Nominatim documentation](https://nominatim.org/release-docs/5.3/admin/Update/). For a list of other methods see the output of:
 
 ```sh
 docker exec -it nominatim sudo -u nominatim nominatim replication --help
@@ -251,6 +249,7 @@ This version now requires an external PostgreSQL/PostGIS database. See the [Exte
 ## Docker Compose Examples
 
 For examples of using this version with external PostgreSQL:
+
 - [Docker Compose with external PostgreSQL](contrib/docker-compose-external-db.yml)
 - [Docker Compose with external PostgreSQL and Varnish cache](contrib/docker-compose-external-db-varnish.yml) - Production-ready setup with Varnish 8 for query caching
 
@@ -261,4 +260,3 @@ For examples of using this version with external PostgreSQL:
 - [Hardware sizing for importing the entire planet](https://github.com/mediagis/nominatim-docker/discussions/265)
 - [Upgrading Nominatim](https://github.com/mediagis/nominatim-docker/discussions/317)
 - [Using Nominatim UI](https://github.com/mediagis/nominatim-docker/discussions/486#discussioncomment-7239861)
-
