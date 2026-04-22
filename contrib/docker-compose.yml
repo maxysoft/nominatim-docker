@@ -20,7 +20,7 @@ services:
         source: postgres-data
         target: /var/lib/postgresql
       - type: bind
-        source: ./contrib/postgres/16g-postgresql.conf
+        source: ./postgres/16g-postgresql.conf
         target: /etc/postgresql/postgresql.conf
         read_only: true
     # PostgreSQL configuration optimized for 16 GB RAM machine

@@ -27,7 +27,7 @@ services:
         source: /data/db
         target: /var/lib/postgresql
       - type: bind
-        source: ./contrib/postgres/planet-postgresql.conf
+        source: ./postgres/planet-postgresql.conf
         target: /etc/postgresql/postgresql.conf
         read_only: true
     # PostgreSQL configuration optimized for planet Nominatim import

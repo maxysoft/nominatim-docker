@@ -20,7 +20,7 @@ services:
         source: postgres-data
         target: /var/lib/postgresql
       - type: bind
-        source: ./contrib/postgres/postgresql.conf
+        source: ./postgres/postgresql.conf
         target: /etc/postgresql/postgresql.conf
         read_only: true
     # PostgreSQL configuration optimized for Nominatim
