@@ -4,6 +4,8 @@
 
 ## Table of contents
 
+- [Nominatim Docker (Nominatim version 5.3)](#nominatim-docker-nominatim-version-53)
+  - [Table of contents](#table-of-contents)
   - [Automatic import](#automatic-import)
   - [Configuration](#configuration)
     - [General Parameters](#general-parameters)
@@ -56,7 +58,7 @@ Other places at Geofabrik follow the pattern `https://download.geofabrik.de/$CON
 
 - `REPLICATION_UPDATE_INTERVAL`: How often upstream publishes diffs (in seconds, default: `86400`). _Requires `REPLICATION_URL` to be set._
 - `REPLICATION_RECHECK_INTERVAL`: How long to sleep if no update found yet (in seconds, default: `900`). _Requires `REPLICATION_URL` to be set._
-- `UPDATE_MODE`: How to run replication to [update nominatim data](https://nominatim.org/release-docs/5.2/admin/Update/#updating-nominatim). Options: `continuous`/`once`/`catch-up`/`none` (default: `none`)
+- `UPDATE_MODE`: How to run replication to [update nominatim data](https://nominatim.org/release-docs/5.3/admin/Update/#updating-nominatim). Options: `continuous`/`once`/`catch-up`/`none` (default: `none`)
 - `FREEZE`: Freeze database and disable dynamic updates to save space. (default: `false`)
 - `REVERSE_ONLY`: If you only want to use the Nominatim database for reverse lookups. (default: `false`)
 - `IMPORT_WIKIPEDIA`: Whether to download and import the Wikipedia importance dumps (`true`) or path to importance dump in the container. Importance dumps improve the scoring of results. On a beefy 10-core server, this takes around 5 minutes. (default: `false`)
@@ -102,11 +104,11 @@ Available options are :
 - `full`: Default style that also includes points of interest.
 - `extratags`: Like the full style but also adds most of the OSM tags into the extratags column.
 
-See https://nominatim.org/release-docs/5.2/admin/Import/#filtering-imported-data for more details on those styles.
+See https://nominatim.org/release-docs/5.3/admin/Import/#filtering-imported-data for more details on those styles.
 
 ### Flatnode files
 
-In addition you can also mount a volume / bind-mount on `/nominatim/flatnode` (see: Persistent container data) to use flatnode storage. This is advised for bigger imports (Europe, North America etc.), see: https://nominatim.org/release-docs/5.2/admin/Import/#flatnode-files. If the mount is available for the container, the flatnode configuration is automatically set and used.
+In addition you can also mount a volume / bind-mount on `/nominatim/flatnode` (see: Persistent container data) to use flatnode storage. This is advised for bigger imports (Europe, North America etc.), see: https://nominatim.org/release-docs/5.3/admin/Import/#flatnode-files. If the mount is available for the container, the flatnode configuration is automatically set and used.
 
 ```sh
 docker run -it \
@@ -173,7 +175,7 @@ where the _/osm-maps/data/_ directory contains _monaco-latest.osm.pbf_ file that
 
 ## Updating the database
 
-Full documentation for Nominatim update available [here](https://nominatim.org/release-docs/5.2/admin/Update/). For a list of other methods see the output of:
+Full documentation for Nominatim update available [here](https://nominatim.org/release-docs/5.3/admin/Update/). For a list of other methods see the output of:
 
 ```sh
 docker exec -it nominatim sudo -u nominatim nominatim replication --help
@@ -218,7 +220,7 @@ docker run -it \
 
 Where the path to the importance dump is given relative to the container. (The file does not need to be named `wikimedia-importance.sql.gz`.) The same works for `IMPORT_US_POSTCODES` and `IMPORT_GB_POSTCODES`.
 
-For more information about the Tiger address file, see [Installing TIGER housenumber data for the US](https://nominatim.org/release-docs/5.2/customize/Tiger/).
+For more information about the Tiger address file, see [Installing TIGER housenumber data for the US](https://nominatim.org/release-docs/5.3/customize/Tiger/).
 
 ## Development
 
