@@ -87,7 +87,8 @@ Both images built on the same host from the same base digest:
 
 | | `master` | this branch |
 | --- | --- | --- |
-| Image size | 1.1 GB | 734 MB |
+| Image size (compressed, as a registry stores it) | 387 MB | **167 MB** |
+| Image size (uncompressed, `docker images`) | 1.1 GB | 454 MB |
 | setuid/setgid binaries | 14 | 0 |
 | Shutdown latency (`docker stop`) | up to 5 s | ~1 s |
 | Python dependencies pinned | 1 of 6 | 24 of 24, with hashes |
@@ -96,10 +97,18 @@ BuildKit's own linter flags `master` with
 `SecretsUsedInArgOrEnv: Do not use ARG or ENV instructions for sensitive data
 (ENV "NOMINATIM_PASSWORD")`, which is the same finding as C1 below.
 
-The size reduction comes from dropping `build-essential`, `python3-dev`,
-`libicu-dev`, `pkg-config`, `sudo`, `sshpass`, `openssh-client` and `curl` from
-the shipped image, and from replacing the `FROM scratch` + `COPY --from=build / /`
-layer collapse with a real multi-stage build. The collapse traded away the base
+Most of the reduction is one package. Debian's `osm2pgsql` ships
+`osm2pgsql-gen`, a vector-tile generalisation tool that Nominatim never invokes
+— it references only `osm2pgsql` — and that single binary depends on OpenCV,
+which pulls GDAL, which pulls Mesa, which pulls LLVM: about 195 MB installed
+that nothing in the geocoder links against. Purging it in the same layer as the
+install removes it for real; doing so in a later layer would only hide it. The
+build fails if `osm2pgsql --version` stops working afterwards.
+
+The rest comes from dropping `build-essential`, `python3-dev`, `libicu-dev`,
+`pkg-config`, `sudo`, `sshpass`, `openssh-client` and `curl` from the shipped
+image, and from replacing the `FROM scratch` + `COPY --from=build / /` layer
+collapse with a real multi-stage build. The collapse traded away the base
 image's `ENV` (including `LANG`), any `LABEL`/`HEALTHCHECK`, base-image
 provenance for scanners, and all layer sharing between versions — for a saving
 that a normal multi-stage build exceeds anyway.

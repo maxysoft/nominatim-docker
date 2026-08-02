@@ -103,6 +103,23 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         postgresql-client \
         python3 \
         python3-icu \
+    # Debian's osm2pgsql package also ships osm2pgsql-gen, a vector-tile
+    # generalisation tool that Nominatim never invokes (it references only
+    # `osm2pgsql`). That one binary is what drags in OpenCV -> GDAL -> Mesa ->
+    # LLVM: roughly 195 MB installed, none of which the geocoder links against.
+    # Purging it in this same layer is what actually removes the bytes; doing it
+    # in a later layer would only hide them.
+    && rm -f /usr/bin/osm2pgsql-gen \
+    && dpkg --purge --force-depends \
+        libopencv-imgcodecs410 libopencv-imgproc410 libopencv-core410 \
+        libgdal36 mesa-libgallium libllvm19 libz3-4 \
+        libgbm1 libglx-mesa0 libglx0 libgl1 \
+        libgdcm3.0t64 libnetcdf22 libhdf5-310 libhdf5-hl-310 \
+        libpoppler147 libcfitsio10t64 libxerces-c3.2t64 \
+        libspatialite8t64 libgeotiff5 \
+    # Fail the build, not production, if a future package change makes
+    # osm2pgsql actually need any of the above.
+    && osm2pgsql --version \
     && rm -f /usr/sbin/policy-rc.d \
     && rm -rf /var/lib/apt/lists/*
 
