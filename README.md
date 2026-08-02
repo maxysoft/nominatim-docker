@@ -8,7 +8,7 @@
 > ⚠️ The following code modifications and implementations were generated with the assistance of **AI (Microsoft Copilot)**.  
 > Please review carefully before using in production.
 
-> **⚠️ Important:** This version requires an external PostgreSQL database with PostGIS. See [external-postgis.md](external-postgis.md) for setup instructions.
+> **⚠️ Important:** This version requires an external PostgreSQL database with PostGIS. See [EXTERNAL-POSTGIS.md](docs/EXTERNAL-POSTGIS.md) for setup instructions.
 
 > [!WARNING]
 > **Base image changed from `ubuntu:24.04` to `debian:13.4-slim`** (pinned by SHA256 digest).
@@ -17,17 +17,16 @@
 ## Supplementary Data — Storage Box Credentials
 
 Optional supplementary datasets (Wikipedia importance dump, GB/US postcodes, Tiger addresses) are
-re-hosted on a Hetzner storage box to avoid hammering the upstream nominatim.org servers
-(see [#416](https://github.com/mediagis/nominatim-docker/issues/416)).
+downloaded over HTTPS from `https://nominatim.org/data`, verified against the system CA bundle.
 
-| Variable | Value |
-| --- | --- |
-| `STORAGE_USER` | `u355874-sub1` |
-| `STORAGE_HOST` | `u355874-sub1.your-storagebox.de` |
-| `STORAGE_PASSWORD` | `DMg5bmLPY7npHL2Q` |
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `DATA_MIRROR_URL` | `https://nominatim.org/data` | Base URL for the supplementary datasets |
+| `IMPORT_WIKIPEDIA_SHA256` etc. | unset | Optional per-dataset checksum, verified after download |
 
-To override (e.g. your own mirror), set these three environment variables in your compose file before
-enabling any `IMPORT_WIKIPEDIA`, `IMPORT_GB_POSTCODES`, `IMPORT_US_POSTCODES`, or `IMPORT_TIGER_ADDRESSES` flags.
+Point `DATA_MIRROR_URL` at your own mirror to avoid loading the upstream servers
+(see [#416](https://github.com/mediagis/nominatim-docker/issues/416)). Each `IMPORT_*` switch also
+accepts an absolute path to a local file instead of `true`.
 
 ## Quick Start
 
@@ -47,7 +46,7 @@ For production deployments with caching, use the Varnish-enabled configuration:
 docker compose -f contrib/docker-compose-varnish.yml up
 ```
 
-Or see [external-postgis.md](external-postgis.md) for complete setup instructions with custom configurations.
+Or see [EXTERNAL-POSTGIS.md](docs/EXTERNAL-POSTGIS.md) for complete setup instructions with custom configurations.
 
 After the import is complete, you can access the Nominatim API at `http://localhost:8080/search.php?q=avenue%20pasteur` (or `http://localhost/search.php?q=avenue%20pasteur` when using the Varnish configuration).
 

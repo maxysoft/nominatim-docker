@@ -176,4 +176,4 @@ docker exec nominatim-varnish wget -O- http://nominatim:8080/status.php
 
 - [Nominatim API Documentation](https://nominatim.org/release-docs/latest/api/Overview/)
 - [Varnish Cache Documentation](https://varnish-cache.org/docs/)
-- [External PostGIS Setup](../external-postgis.md)
+- [External PostGIS Setup](../docs/EXTERNAL-POSTGIS.md)

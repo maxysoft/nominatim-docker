@@ -12,7 +12,7 @@ services:
     hostname: nominatim-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_PASSWORD: very_secure_password
+      POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:?set POSTGRES_ADMIN_PASSWORD in .env}
       POSTGRES_USER: postgres
       POSTGRES_DB: nominatim
     volumes:
@@ -51,19 +51,36 @@ services:
       POSTGRES_HOST: nominatim-postgres
       POSTGRES_PORT: 5432
       POSTGRES_DB: nominatim
-      NOMINATIM_PASSWORD: very_secure_password
-      POSTGRES_ADMIN_PASSWORD: very_secure_password
+      NOMINATIM_PASSWORD: ${NOMINATIM_PASSWORD:?set NOMINATIM_PASSWORD in .env}
+      POSTGRES_ADMIN_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:?set POSTGRES_ADMIN_PASSWORD in .env}
       
       # Nominatim configuration
       # see https://github.com/maxysoft/nominatim-docker/tree/master/5.3#configuration for more options
       PBF_URL: https://download.geofabrik.de/europe/monaco-latest.osm.pbf
       REPLICATION_URL: https://download.geofabrik.de/europe/monaco-updates/
 
-      # Read-only Hetzner storage box for supplementary data (Wikipedia, postcodes, Tiger).
-      # Uncomment and set IMPORT_WIKIPEDIA / IMPORT_GB_POSTCODES / IMPORT_US_POSTCODES to "true" to use them.
-      # STORAGE_USER: u355874-sub1
-      # STORAGE_HOST: u355874-sub1.your-storagebox.de
-      # STORAGE_PASSWORD: DMg5bmLPY7npHL2Q
+      # Supplementary datasets (Wikipedia importance, GB/US postcodes, Tiger) are
+      # fetched over HTTPS from nominatim.org. Set the IMPORT_* switches to "true"
+      # to enable them, or point DATA_MIRROR_URL at your own mirror.
+      # DATA_MIRROR_URL: https://nominatim.org/data
+    # No setuid binary remains in the image, so privilege escalation can be
+    # blocked outright. The retained capabilities are what the entrypoint needs
+    # to take ownership of the volume and drop to the unprivileged user.
+    # Reap orphaned processes; the entrypoint deliberately does not.
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      # KILL is required: the entrypoint runs as uid 0 and signals children it
+      # forked as uid 1000, which the kernel otherwise denies (EPERM).
+      - KILL
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETUID
+      - SETGID
     volumes:
       - nominatim-data:/nominatim
     depends_on:

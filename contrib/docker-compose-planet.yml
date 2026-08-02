@@ -19,7 +19,7 @@ services:
     hostname: nominatim-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_PASSWORD: very_secure_password
+      POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:?set POSTGRES_ADMIN_PASSWORD in .env}
       POSTGRES_USER: postgres
       POSTGRES_DB: nominatim
     volumes:
@@ -56,8 +56,8 @@ services:
       POSTGRES_HOST: nominatim-postgres
       POSTGRES_PORT: 5432
       POSTGRES_DB: nominatim
-      NOMINATIM_PASSWORD: very_secure_password
-      POSTGRES_ADMIN_PASSWORD: very_secure_password
+      NOMINATIM_PASSWORD: ${NOMINATIM_PASSWORD:?set NOMINATIM_PASSWORD in .env}
+      POSTGRES_ADMIN_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:?set POSTGRES_ADMIN_PASSWORD in .env}
 
       # Planet-specific Nominatim configuration
       # https://ftp5.gwdg.de/pub/misc/openstreetmap/planet.openstreetmap.org/pbf/planet-latest.osm.pbf returns 404.
@@ -68,6 +68,24 @@ services:
       IMPORT_US_POSTCODES: "true"
       IMPORT_GB_POSTCODES: "true"
       THREADS: 16
+    # No setuid binary remains in the image, so privilege escalation can be
+    # blocked outright. The retained capabilities are what the entrypoint needs
+    # to take ownership of the volume and drop to the unprivileged user.
+    # Reap orphaned processes; the entrypoint deliberately does not.
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      # KILL is required: the entrypoint runs as uid 0 and signals children it
+      # forked as uid 1000, which the kernel otherwise denies (EPERM).
+      - KILL
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETUID
+      - SETGID
     volumes:
       - type: bind
         source: /data/nominatim

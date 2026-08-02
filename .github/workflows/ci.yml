@@ -5,7 +5,31 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  static:
+    name: Static analysis
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version: "1.24"
+          cache: true
+      - run: go vet ./...
+      - run: go test -count=1 ./...
+      - run: gofmt -l ./cmd ./internal | tee /dev/stderr | (! read)
+      - name: Hadolint
+        run: docker run --rm -i hadolint/hadolint < Dockerfile
+      - name: ShellCheck
+        run: docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:stable test/integration.sh
+
   build:
     name: Build docker image
     if: ${{ !contains(github.event.head_commit.message, 'skip_build') }}
@@ -15,24 +39,24 @@ jobs:
       NOMINATIM_VERSION: ${{ steps.get_version.outputs.NOMINATIM_VERSION }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4.0.0
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
 
       - name: Extract Nominatim Version
         id: get_version
         run: echo "NOMINATIM_VERSION=$(grep -oP '(?<=ARG NOMINATIM_VERSION=)[0-9.]+' Dockerfile)" >> $GITHUB_OUTPUT
 
       - name: Build and export image
-        uses: docker/build-push-action@v7.1.0
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
         with:
           context: .
           tags: nominatim:${{ steps.get_version.outputs.NOMINATIM_VERSION }}
           outputs: type=docker,dest=/tmp/nominatim.tar
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: nominatim-${{ steps.get_version.outputs.NOMINATIM_VERSION }}
           path: /tmp/nominatim.tar
@@ -76,8 +100,8 @@ jobs:
                 -e POSTGRES_DB=nominatim \
                 -e NOMINATIM_PASSWORD=very_secure_password \
                 -e POSTGRES_ADMIN_PASSWORD=very_secure_password \
-                -e PBF_URL=http://download.geofabrik.de/europe/monaco-${four_days_ago}.osm.pbf \
-                -e REPLICATION_URL=http://download.geofabrik.de/europe/monaco-updates/ \
+                -e PBF_URL=https://download.geofabrik.de/europe/monaco-${four_days_ago}.osm.pbf \
+                -e REPLICATION_URL=https://download.geofabrik.de/europe/monaco-updates/ \
                 -v nominatim-data:/nominatim \
                 -p 8001:8080 \
                 --name nominatim \
@@ -85,7 +109,7 @@ jobs:
 
               ./assert-non-empty-json "http://localhost:8001/search.php?q=avenue%20pasteur"
               ./assert-non-empty-json "http://localhost:8001/status.php?format=json"
-              docker exec -i nominatim sudo -u nominatim nominatim replication --project-dir /nominatim --once
+              docker exec -i -u nominatim nominatim nominatim replication --project-dir /nominatim --once
               ./assert-non-empty-json "http://localhost:8001/search.php?q=avenue%20pasteur"
               
               # Cleanup
@@ -116,8 +140,8 @@ jobs:
                 -e POSTGRES_DB=nominatim \
                 -e NOMINATIM_PASSWORD=very_secure_password \
                 -e POSTGRES_ADMIN_PASSWORD=very_secure_password \
-                -e PBF_URL=http://download.geofabrik.de/europe/monaco-latest.osm.pbf \
-                -e REPLICATION_URL=http://download.geofabrik.de/europe/monaco-updates/ \
+                -e PBF_URL=https://download.geofabrik.de/europe/monaco-latest.osm.pbf \
+                -e REPLICATION_URL=https://download.geofabrik.de/europe/monaco-updates/ \
                 -v nominatim-data2:/nominatim \
                 -p 8002:8080 \
                 --name nominatim \
@@ -157,8 +181,8 @@ jobs:
                 -e POSTGRES_DB=nominatim \
                 -e NOMINATIM_PASSWORD=very_secure_password \
                 -e POSTGRES_ADMIN_PASSWORD=very_secure_password \
-                -e PBF_URL=http://download.geofabrik.de/europe/monaco-${four_days_ago}.osm.pbf \
-                -e REPLICATION_URL=http://download.geofabrik.de/europe/monaco-updates/ \
+                -e PBF_URL=https://download.geofabrik.de/europe/monaco-${four_days_ago}.osm.pbf \
+                -e REPLICATION_URL=https://download.geofabrik.de/europe/monaco-updates/ \
                 -v nominatim-data3:/nominatim \
                 -p 8003:8080 \
                 --name nominatim \
@@ -180,15 +204,15 @@ jobs:
                 -e POSTGRES_DB=nominatim \
                 -e NOMINATIM_PASSWORD=very_secure_password \
                 -e POSTGRES_ADMIN_PASSWORD=very_secure_password \
-                -e PBF_URL=http://download.geofabrik.de/europe/monaco-${four_days_ago}.osm.pbf \
-                -e REPLICATION_URL=http://download.geofabrik.de/europe/monaco-updates/ \
+                -e PBF_URL=https://download.geofabrik.de/europe/monaco-${four_days_ago}.osm.pbf \
+                -e REPLICATION_URL=https://download.geofabrik.de/europe/monaco-updates/ \
                 -v nominatim-data3:/nominatim \
                 -p 8004:8080 \
                 --name nominatim \
                 nominatim:$NOMINATIM_VERSION &
 
               ./assert-non-empty-json "http://localhost:8004/search.php?q=avenue%20pasteur"
-              docker exec -i nominatim sudo -u nominatim nominatim replication --project-dir /nominatim --once
+              docker exec -i -u nominatim nominatim nominatim replication --project-dir /nominatim --once
               ./assert-non-empty-json "http://localhost:8004/search.php?q=avenue%20pasteur"
               
               # Cleanup
@@ -222,8 +246,8 @@ jobs:
                 -e POSTGRES_DB=nominatim \
                 -e NOMINATIM_PASSWORD=very_secure_password \
                 -e POSTGRES_ADMIN_PASSWORD=very_secure_password \
-                -e PBF_URL=http://download.geofabrik.de/europe/monaco-${four_days_ago}.osm.pbf \
-                -e REPLICATION_URL=http://download.geofabrik.de/europe/monaco-updates/ \
+                -e PBF_URL=https://download.geofabrik.de/europe/monaco-${four_days_ago}.osm.pbf \
+                -e REPLICATION_URL=https://download.geofabrik.de/europe/monaco-updates/ \
                 -e UPDATE_MODE=once \
                 -v nominatim-data-update1:/nominatim \
                 -p 8020:8080 \
@@ -232,8 +256,10 @@ jobs:
 
               ./assert-non-empty-json "http://localhost:8020/search.php?q=avenue%20pasteur"
               ./assert-non-empty-json "http://localhost:8020/status.php?format=json"
+              # Replication output goes to the container's stdout now, not to an
+              # unrotated /var/log/replication.log inside the container.
               echo -n "check replication log for Update completed. Count:"
-              docker exec nominatim /bin/bash -c 'tail -f /var/log/replication.log | grep -m 1 -c "Update completed." '
+              timeout 300 docker logs -f nominatim 2>&1 | grep -m 1 -c "Update completed."
               
               # Cleanup
               docker stop nominatim postgres || true
@@ -266,8 +292,8 @@ jobs:
                 -e POSTGRES_DB=nominatim \
                 -e NOMINATIM_PASSWORD=very_secure_password \
                 -e POSTGRES_ADMIN_PASSWORD=very_secure_password \
-                -e PBF_URL=http://download.geofabrik.de/europe/monaco-${days_ago}.osm.pbf \
-                -e REPLICATION_URL=http://download.geofabrik.de/europe/monaco-updates/ \
+                -e PBF_URL=https://download.geofabrik.de/europe/monaco-${days_ago}.osm.pbf \
+                -e REPLICATION_URL=https://download.geofabrik.de/europe/monaco-updates/ \
                 -e UPDATE_MODE=continuous \
                 -v nominatim-data-update2:/nominatim \
                 -p 8021:8080 \
@@ -276,8 +302,10 @@ jobs:
 
               ./assert-non-empty-json "http://localhost:8021/search.php?q=avenue%20pasteur"
               ./assert-non-empty-json "http://localhost:8021/status.php?format=json"
+              # Replication output goes to the container's stdout now, not to an
+              # unrotated /var/log/replication.log inside the container.
               echo -n "check replication log for Update completed. Count:"
-              docker exec nominatim /bin/bash -c 'tail -f /var/log/replication.log | grep -m 1 -c "Update completed." '
+              timeout 300 docker logs -f nominatim 2>&1 | grep -m 1 -c "Update completed."
               
               # Cleanup
               docker stop nominatim postgres || true
@@ -307,8 +335,8 @@ jobs:
                 -e POSTGRES_DB=nominatim \
                 -e NOMINATIM_PASSWORD=very_secure_password \
                 -e POSTGRES_ADMIN_PASSWORD=very_secure_password \
-                -e PBF_URL=http://download.geofabrik.de/europe/monaco-latest.osm.pbf \
-                -e REPLICATION_URL=http://download.geofabrik.de/europe/monaco-updates/ \
+                -e PBF_URL=https://download.geofabrik.de/europe/monaco-latest.osm.pbf \
+                -e REPLICATION_URL=https://download.geofabrik.de/europe/monaco-updates/ \
                 -e IMPORT_STYLE=full \
                 -v nominatim-data4:/nominatim \
                 -p 8005:8080 \
@@ -346,8 +374,8 @@ jobs:
                 -e POSTGRES_DB=nominatim \
                 -e NOMINATIM_PASSWORD=very_secure_password \
                 -e POSTGRES_ADMIN_PASSWORD=very_secure_password \
-                -e PBF_URL=http://download.geofabrik.de/europe/monaco-latest.osm.pbf \
-                -e REPLICATION_URL=http://download.geofabrik.de/europe/monaco-updates/ \
+                -e PBF_URL=https://download.geofabrik.de/europe/monaco-latest.osm.pbf \
+                -e REPLICATION_URL=https://download.geofabrik.de/europe/monaco-updates/ \
                 -e IMPORT_STYLE=admin \
                 -v nominatim-data5:/nominatim \
                 -p 8006:8080 \
@@ -378,7 +406,7 @@ jobs:
               done
               echo "PostgreSQL is ready"
               
-              wget --cut-dirs=1 -nH -xP /tmp/data http://download.geofabrik.de/europe/monaco-latest.osm.pbf
+              wget --cut-dirs=1 -nH -xP /tmp/data https://download.geofabrik.de/europe/monaco-latest.osm.pbf
               docker run -i --rm --network nominatim-net6 \
                 --shm-size 1g \
                 -e POSTGRES_HOST=postgres \
@@ -387,7 +415,7 @@ jobs:
                 -e NOMINATIM_PASSWORD=very_secure_password \
                 -e POSTGRES_ADMIN_PASSWORD=very_secure_password \
                 -e PBF_PATH=/nominatim/data/monaco-latest.osm.pbf \
-                -e REPLICATION_URL=http://download.geofabrik.de/europe/monaco-updates/ \
+                -e REPLICATION_URL=https://download.geofabrik.de/europe/monaco-updates/ \
                 -v nominatim-data6:/nominatim \
                 -v /tmp/data:/nominatim/data \
                 -p 8007:8080 \
@@ -425,7 +453,7 @@ jobs:
                 -e POSTGRES_DB=nominatim \
                 -e NOMINATIM_PASSWORD=very_secure_password \
                 -e POSTGRES_ADMIN_PASSWORD=very_secure_password \
-                -e PBF_URL=http://download.geofabrik.de/europe/monaco-latest.osm.pbf \
+                -e PBF_URL=https://download.geofabrik.de/europe/monaco-latest.osm.pbf \
                 -v nominatim-data7:/nominatim \
                 -p 8008:8080 \
                 --name nominatim \
@@ -462,7 +490,7 @@ jobs:
                 -e POSTGRES_DB=nominatim \
                 -e NOMINATIM_PASSWORD=very_secure_password \
                 -e POSTGRES_ADMIN_PASSWORD=very_secure_password \
-                -e PBF_URL=http://download.geofabrik.de/europe/monaco-latest.osm.pbf \
+                -e PBF_URL=https://download.geofabrik.de/europe/monaco-latest.osm.pbf \
                 -e FREEZE="true" \
                 -v nominatim-data8:/nominatim \
                 -p 8009:8080 \
@@ -540,7 +568,7 @@ jobs:
                 -e POSTGRES_DB=nominatim \
                 -e NOMINATIM_PASSWORD=very_secure_password \
                 -e POSTGRES_ADMIN_PASSWORD=very_secure_password \
-                -e PBF_URL=http://download.geofabrik.de/europe/monaco-latest.osm.pbf \
+                -e PBF_URL=https://download.geofabrik.de/europe/monaco-latest.osm.pbf \
                 -e REVERSE_ONLY="true" \
                 -v nominatim-data10:/nominatim \
                 -p 8011:8080 \
@@ -578,7 +606,7 @@ jobs:
                 -e POSTGRES_DB=nominatim \
                 -e NOMINATIM_PASSWORD=very_secure_password \
                 -e POSTGRES_ADMIN_PASSWORD=very_secure_password \
-                -e PBF_URL=http://download.geofabrik.de/europe/monaco-latest.osm.pbf \
+                -e PBF_URL=https://download.geofabrik.de/europe/monaco-latest.osm.pbf \
                 -v nominatim-data11:/nominatim \
                 -p 8012:8080 \
                 --name nominatim \
@@ -621,7 +649,7 @@ jobs:
                 -e POSTGRES_DB=nominatim \
                 -e NOMINATIM_PASSWORD=very_secure_password \
                 -e POSTGRES_ADMIN_PASSWORD=very_secure_password \
-                -e PBF_URL=http://download.geofabrik.de/europe/monaco-latest.osm.pbf \
+                -e PBF_URL=https://download.geofabrik.de/europe/monaco-latest.osm.pbf \
                 -e WARMUP_ON_STARTUP=true \
                 -v nominatim-data12:/nominatim \
                 -p 8013:8080 \
@@ -660,7 +688,7 @@ jobs:
                 -e POSTGRES_DB=nominatim \
                 -e NOMINATIM_PASSWORD=very_secure_password \
                 -e POSTGRES_ADMIN_PASSWORD=very_secure_password \
-                -e PBF_URL=http://download.geofabrik.de/europe/monaco-latest.osm.pbf \
+                -e PBF_URL=https://download.geofabrik.de/europe/monaco-latest.osm.pbf \
                 -e WARMUP_ON_STARTUP=false \
                 -v nominatim-data13:/nominatim \
                 -p 8014:8080 \
@@ -699,8 +727,8 @@ jobs:
                 -e POSTGRES_DB=nominatim \
                 -e NOMINATIM_PASSWORD=very_secure_password \
                 -e POSTGRES_ADMIN_PASSWORD=very_secure_password \
-                -e PBF_URL=http://download.geofabrik.de/europe/monaco-latest.osm.pbf \
-                -e REPLICATION_URL=http://download.geofabrik.de/europe/monaco-updates/ \
+                -e PBF_URL=https://download.geofabrik.de/europe/monaco-latest.osm.pbf \
+                -e REPLICATION_URL=https://download.geofabrik.de/europe/monaco-updates/ \
                 -v nominatim-data14:/nominatim \
                 -p 8015:8080 \
                 --name nominatim \
@@ -744,7 +772,7 @@ jobs:
               echo "$CT" | grep -qi "application/json" && echo "✅ Content-Type: application/json" || (echo "FAIL: Content-Type header: $CT"; exit 1)
 
               # Run database health check inside the container
-              docker exec nominatim sudo -u nominatim nominatim admin --check-database --project-dir /nominatim
+              docker exec -u nominatim nominatim nominatim admin --check-database --project-dir /nominatim
               
               # Cleanup
               docker stop nominatim postgres || true
@@ -752,7 +780,7 @@ jobs:
     
     steps:
       - name: Download artifact
-        uses: actions/download-artifact@v8.0.1
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: nominatim-${{ needs.build.outputs.NOMINATIM_VERSION }}
           path: /tmp
@@ -761,7 +789,7 @@ jobs:
           docker load --input /tmp/nominatim.tar
           docker image ls -a
       - name: Checkout
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       # Excute the test scenario
       - name: ${{ matrix.test_scenario.name }}
@@ -780,10 +808,10 @@ jobs:
     
     steps:
       - name: Checkout
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4.0.0
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
 
       - name: Get commit short reference
         id: get_commit
@@ -803,13 +831,13 @@ jobs:
 
       - name: Login to Docker Hub
         if: ${{ github.repository_owner == 'maxysoft' }}
-        uses: docker/login-action@v4.1.0
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v4.1.0
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -817,11 +845,13 @@ jobs:
 
       - name: Build and push to Docker Hub
         if: ${{ github.repository_owner == 'maxysoft' }}
-        uses: docker/build-push-action@v7.1.0
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
         with:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
+          provenance: mode=max
+          sbom: true
           tags: |
             ${{ github.repository }}:v${{ steps.get_version.outputs.NOMINATIM_VERSION }}-${{ steps.get_commit.outputs.SHORT_SHA }}
             ${{ github.repository }}:latest
@@ -832,11 +862,13 @@ jobs:
             org.opencontainers.image.version=${{ steps.get_version.outputs.NOMINATIM_VERSION }}
 
       - name: Build and push to GitHub Container Registry
-        uses: docker/build-push-action@v7.1.0
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
         with:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
+          provenance: mode=max
+          sbom: true
           tags: |
             ghcr.io/${{ github.repository }}:v${{ steps.get_version.outputs.NOMINATIM_VERSION }}-${{ steps.get_commit.outputs.SHORT_SHA }}
             ghcr.io/${{ github.repository }}:latest

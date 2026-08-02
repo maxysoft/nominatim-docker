@@ -1,6 +1,6 @@
 # Nominatim Docker (Nominatim version 5.3)
 
-> **Note:** This version has been modified to use external PostgreSQL/PostGIS instead of running PostgreSQL inside the container. For setup instructions with external database, see [external-postgis.md](external-postgis.md).
+> **Note:** This version has been modified to use external PostgreSQL/PostGIS instead of running PostgreSQL inside the container. For setup instructions with external database, see [EXTERNAL-POSTGIS.md](docs/EXTERNAL-POSTGIS.md).
 
 ## Table of contents
 
@@ -67,7 +67,10 @@ Other places at Geofabrik follow the pattern `https://download.geofabrik.de/$CON
 - `IMPORT_TIGER_ADDRESSES`: Whether to download and import the Tiger address data (`true`) or path to a preprocessed Tiger address set in the container. (default: `false`)
 - `THREADS`: How many threads should be used to import (default: number of processing units available to the current process via `nproc`)
 - `GUNICORN_WORKERS`: Specifies how many Gunicorn worker processes should handle API requests. If not explicitly set, it defaults to the number of available CPU cores `(nproc)`. Increase this value to improve concurrent request handling capacity, but ensure it aligns with your server's CPU resources.
-- `NOMINATIM_PASSWORD`: The password to connect to the database with (default: `qaIACxO6wMR3`)
+- `NOMINATIM_PASSWORD`: Password for the `nominatim` and `www-data` database roles. **Required — there is no default.**
+  Use `NOMINATIM_PASSWORD_FILE` to read it from a secret file instead. Must not contain `;`.
+- `POSTGRES_ADMIN_PASSWORD`: Password for the PostgreSQL superuser. **Required for the initial import**,
+  used only to create roles and install PostGIS. Also supports a `_FILE` variant.
 - `WARMUP_ON_STARTUP`: Whether to warm up the database caches on container startup by loading tables and indices into RAM. This can improve initial query performance, especially on systems with slow disks and sufficient RAM. However, it will increase the container's startup time. Set to `true` to enable. (default: `false`)
 - `DEBUG_MODE`: Enable verbose debug output showing all executed commands during startup and import. Useful for troubleshooting but creates noisy logs. Set to `true` to enable. (default: `false`)
 
@@ -87,7 +90,7 @@ This version requires an external PostgreSQL database with PostGIS extension. Th
 
 For PostgreSQL tuning, configure your external PostgreSQL server according to the [official Nominatim documentation](https://nominatim.org/release-docs/5.3/admin/Installation/#tuning-the-postgresql-database).
 
-See [external-postgis.md](external-postgis.md) for complete setup instructions and Docker Compose examples.
+See [EXTERNAL-POSTGIS.md](docs/EXTERNAL-POSTGIS.md) for complete setup instructions and Docker Compose examples.
 
 ### Import Style
 
@@ -176,13 +179,13 @@ where the _/osm-maps/data/_ directory contains _monaco-latest.osm.pbf_ file that
 Full documentation for Nominatim update is available her: [Nominatim documentation](https://nominatim.org/release-docs/5.3/admin/Update/). For a list of other methods see the output of:
 
 ```sh
-docker exec -it nominatim sudo -u nominatim nominatim replication --help
+docker exec -it -u nominatim nominatim nominatim replication --help
 ```
 
 The following command will keep updating the database forever:
 
 ```sh
-docker exec -it nominatim sudo -u nominatim nominatim replication --project-dir /nominatim
+docker exec -it -u nominatim nominatim nominatim replication --project-dir /nominatim
 ```
 
 If there are no updates available this process will sleep for 15 minutes and try again.
@@ -244,14 +247,14 @@ These files follow the naming convention of `docker-compose-*.yml` and contain c
 
 ## External PostGIS Database Usage
 
-This version now requires an external PostgreSQL/PostGIS database. See the [External PostGIS Documentation](external-postgis.md) for complete setup instructions.
+This version now requires an external PostgreSQL/PostGIS database. See the [External PostGIS Documentation](docs/EXTERNAL-POSTGIS.md) for complete setup instructions.
 
 ## Docker Compose Examples
 
 For examples of using this version with external PostgreSQL:
 
-- [Docker Compose with external PostgreSQL](contrib/docker-compose-external-db.yml)
-- [Docker Compose with external PostgreSQL and Varnish cache](contrib/docker-compose-external-db-varnish.yml) - Production-ready setup with Varnish 8 for query caching
+- [Docker Compose with external PostgreSQL](contrib/docker-compose.yml)
+- [Docker Compose with external PostgreSQL and Varnish cache](contrib/docker-compose-varnish.yml) - Production-ready setup with Varnish 8 for query caching
 
 ## Assorted use cases documented in issues
 

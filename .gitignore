@@ -1,2 +1,6 @@
 .project
 actionlint
+
+# Local secrets for the contrib compose stacks.
+contrib/.env
+.env

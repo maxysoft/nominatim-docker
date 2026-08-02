@@ -1,0 +1,9 @@
+# Direct Python dependencies. requirements.txt is generated from this file with
+# fully pinned versions and hashes; regenerate with `make requirements`.
+nominatim-db==5.3.2
+nominatim-api==5.3.2
+osmium
+psycopg[binary]
+falcon
+gunicorn
+PyICU

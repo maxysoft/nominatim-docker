@@ -7,6 +7,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Releases
 
+### Unreleased — entrypoint rewritten in Go
+
+Full rationale, parity matrix and migration steps: [docs/REFACTOR.md](docs/REFACTOR.md).
+
+- **Changed:** Replaced `config.sh`, `init.sh` and `start.sh` (439 lines of bash) with `nominatim-ctl`,
+  a static Go binary that runs as PID 1. Nominatim itself is unchanged.
+- **Changed:** `.env` is regenerated in full on every start instead of being patched with `sed`.
+  Configuration changes now take effect on restart; previously the `__PLACEHOLDER__` tokens were
+  consumed on the first run and every later start silently ignored `POSTGRES_HOST`,
+  `NOMINATIM_PASSWORD`, `IMPORT_STYLE` and `REPLICATION_URL`.
+- **Changed:** Import completion is detected from the database (`public.placex`) rather than the
+  `import-finished` file, which lived in a different volume from the data it guarded.
+- **Changed:** The image runs Gunicorn in the foreground; a crash now exits non-zero. A signalled
+  shutdown still exits 0.
+- **Changed:** Supplementary datasets are fetched over HTTPS from `nominatim.org` instead of `scp`.
+- **Changed:** The `nominatim` database role is created with `CREATEDB` instead of `SUPERUSER`;
+  PostGIS is installed into `template1` by the administrative connection.
+- **Changed:** The API connects as the read-only `www-data` role.
+- **Security:** Removed the hardcoded `NOMINATIM_PASSWORD` default, which became a PostgreSQL
+  superuser password. The variable is now required.
+- **Security:** Removed `sudo`, `sshpass` and `openssh-client`; all setuid/setgid bits are stripped
+  at build time, so `no-new-privileges:true` is now meaningful.
+- **Security:** Fixed SQL injection through `NOMINATIM_PASSWORD` and `POSTGRES_DB`.
+- **Security:** `DROP DATABASE` refuses to touch a populated database without `ALLOW_DROP_EXISTING_DB=true`.
+- **Security:** Pinned all Python dependencies with hashes (`gunicorn>=25.0` was resolving to 26.0.0)
+  and all GitHub Actions to commit SHAs; added a least-privilege `permissions:` block to CI.
+- **Added:** `POSTGRES_SSLMODE`, `DATA_MIRROR_URL`, `ALLOW_DROP_EXISTING_DB`, `API_DB_USER`,
+  `GUNICORN_BIND`, `NOMINATIM_ROLE_OPTIONS`, `PROVISION_EXTENSIONS`, `*_SHA256` checksums, and
+  `_FILE` variants for both passwords.
+- **Added:** A `HEALTHCHECK` hitting `/status.php`, implemented in the entrypoint so the image needs no curl.
+- **Added:** `make check` / `make integration` and `test/integration.sh`, a local stack that imports
+  Monaco and asserts the API surface, privilege model, restart behaviour and shutdown semantics.
+- **Fixed:** Worker and thread counts respect the container CPU quota instead of reading host core count.
+- **Fixed:** `contrib/docker-compose-varnish.yml` was missing its top-level `networks:` block and
+  failed `docker compose config`.
+- **Removed:** `STORAGE_USER`, `STORAGE_HOST`, `STORAGE_PASSWORD`.
+
+Fixes from an independent review of the refactor itself:
+
+- **Fixed:** `cap_drop: ALL` in the `contrib/` compose files omitted `CAP_KILL`, so the entrypoint
+  (uid 0) could not signal the Gunicorn process it forked as uid 1000. Graceful shutdown silently
+  failed and the container was SIGKILLed at the stop timeout. The test stack now mirrors the shipped
+  capability set so this cannot regress unnoticed.
+- **Fixed:** The import/skip decision was made before the database was known to be reachable, so a
+  restart during a brief PostgreSQL blip took the import branch and exited non-zero.
+- **Fixed:** Import completion is now recorded as a `COMMENT ON DATABASE` written only after the
+  import succeeds. Keying off `public.placex` alone meant an interrupted import left the table behind
+  and was thereafter served as if it had finished. A database imported by an older release is
+  validated with `nominatim admin --check-database` and adopted automatically.
+- **Fixed:** Passwords containing a space were URL-encoded as `+` in the driver connection string and
+  never decoded back, so the role was created correctly and then failed every login.
+- **Fixed:** SIGTERM was only handled once Gunicorn was running; stopping the container during an
+  import exited 2. The handler is now installed before any long-running work.
+- **Fixed:** `.env` is chmod-ed on every write, so a `0644` file left on a volume by an older image is
+  corrected instead of kept.
+- **Fixed:** `NOMINATIM_*` and `PG*` variables passed to the container reach Nominatim again; the
+  first draft's allow-list silently dropped them, unlike the old `sudo -E`.
+- **Fixed:** `NOMINATIM_ROLE_OPTIONS` is now applied to an existing managed role, not only at creation.
+- **Fixed:** The HEALTHCHECK follows `GUNICORN_BIND` instead of hardcoding `127.0.0.1:8080`.
+- **Fixed:** `DEBUG_MODE` was parsed and never used; it now enables redacted verbose logging.
+- **Fixed:** `contrib/docker-compose-varnish.yml` pointed `POSTGRES_HOST` at a nonexistent service.
+- **Added:** `NOMINATIM_WEBUSER_PASSWORD`, so the read-only API role no longer shares the application
+  role's password. Reject `=` as well as `;` in passwords — both are Nominatim DSN separators.
+
 ### v5.3.2 — 2026-04-22
 
 - **Changed:** Merge from upstream (mediagis/nominatim-docker) to sync docs and contributors

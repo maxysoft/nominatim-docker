@@ -49,9 +49,18 @@ The Nominatim container will automatically:
 If you prefer to set up the database manually, you can create the required users and database:
 
 ```sql
--- Connect as postgres superuser
-CREATE USER nominatim SUPERUSER;
+-- Connect as postgres superuser.
+-- The application role needs CREATEDB, not SUPERUSER: installing PostGIS is the
+-- only step that requires superuser, and the administrator does it once below.
+CREATE USER nominatim CREATEDB;
 CREATE USER "www-data";
+
+-- Install the extensions into template1 so the database the nominatim role
+-- creates inherits them. The container does this automatically unless you set
+-- PROVISION_EXTENSIONS=false.
+\c template1
+CREATE EXTENSION IF NOT EXISTS postgis;
+CREATE EXTENSION IF NOT EXISTS hstore;
 
 -- Set passwords (replace with your actual password)
 ALTER USER nominatim WITH ENCRYPTED PASSWORD 'your_password';
@@ -108,7 +117,9 @@ If the Nominatim container cannot connect to PostgreSQL:
 ### Permission Issues
 If you encounter permission errors:
 
-1. Ensure the `nominatim` user has SUPERUSER privileges
+1. Ensure the `nominatim` role has `CREATEDB`, and that PostGIS and hstore are installed in `template1`
+   (or set `PROVISION_EXTENSIONS=false` and install them yourself). Set `NOMINATIM_ROLE_OPTIONS=SUPERUSER`
+   only if your provider cannot pre-install extensions.
 2. Verify that the database exists and is accessible
 3. Check that PostGIS and hstore extensions are installed
 

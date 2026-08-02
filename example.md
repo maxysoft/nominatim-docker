@@ -57,7 +57,7 @@ docker run -it \
   # Sets the Docker tmpfs. Highly recommended for bigger imports like Europe. At least 1GB - ideally half of the available RAM.
   --shm-size=60g \
 
-  # The password to connect to the database with (default: qaIACxO6wMR3)
+  # Password for the nominatim/www-data database roles. Required; no default.
   -e NOMINATIM_PASSWORD=supersafepassword \
 
   # Sets the ports of the container guest:host

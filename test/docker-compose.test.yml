@@ -1,0 +1,66 @@
+# Local integration stack. Driven by test/integration.sh, not meant for
+# production use — see contrib/ for deployment examples.
+name: nominatim-itest
+
+services:
+  postgres:
+    image: postgis/postgis:18-3.6-alpine
+    environment:
+      POSTGRES_PASSWORD: itest-admin-password
+      POSTGRES_USER: postgres
+      POSTGRES_DB: postgres
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 3s
+      timeout: 5s
+      retries: 30
+    volumes:
+      - pgdata:/var/lib/postgresql
+    command:
+      - postgres
+      - -c
+      - fsync=off
+      - -c
+      - full_page_writes=off
+      - -c
+      - max_connections=100
+
+  nominatim:
+    image: nominatim-itest:local
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PBF_URL: ${PBF_URL:-https://download.geofabrik.de/europe/monaco-latest.osm.pbf}
+      POSTGRES_HOST: postgres
+      POSTGRES_DB: nominatim
+      POSTGRES_SSLMODE: disable
+      POSTGRES_ADMIN_PASSWORD: itest-admin-password
+      NOMINATIM_PASSWORD: itest-nominatim-password
+      IMPORT_STYLE: ${IMPORT_STYLE:-full}
+      REVERSE_ONLY: ${REVERSE_ONLY:-false}
+      WARMUP_ON_STARTUP: ${WARMUP_ON_STARTUP:-false}
+      GUNICORN_WORKERS: "2"
+      THREADS: "2"
+    ports:
+      - "127.0.0.1:${ITEST_PORT:-18080}:8080"
+    volumes:
+      - project:/nominatim
+    # The image ships no setuid binary, so this is safe to assert in the test.
+    # Reap orphaned processes; the entrypoint deliberately does not.
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - KILL
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETUID
+      - SETGID
+
+volumes:
+  project:
+  pgdata:
