@@ -5,7 +5,7 @@
 ![Nominatim Version](https://img.shields.io/badge/Nominatim%20Version-5.3.2-blue?style=flat-square) ![GitHub Workflow Status](https://img.shields.io/github/actions/workflow/status/maxysoft/nominatim-docker/ci.yml?branch=master&style=flat-square) ![Github All Contributors](https://img.shields.io/github/all-contributors/mediagis/nominatim-docker?style=flat-square) ![Docker Pulls](https://img.shields.io/docker/pulls/maxysoft/nominatim-docker?style=flat-square) ![Docker Image Size with architecture (latest by date/latest semver)](https://img.shields.io/docker/image-size/maxysoft/nominatim-docker?style=flat-square)
 
 > [!IMPORTANT]  
-> ⚠️ The following code modifications and implementations were generated with the assistance of **AI (Microsoft Copilot)**.  
+> ⚠️ The following code modifications and implementations were generated with the assistance of **AI (Claude)**.  
 > Please review carefully before using in production.
 
 > **⚠️ Important:** This version requires an external PostgreSQL database with PostGIS. See [EXTERNAL-POSTGIS.md](docs/EXTERNAL-POSTGIS.md) for setup instructions.
