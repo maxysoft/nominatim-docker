@@ -85,10 +85,16 @@ jobs:
                 postgis/postgis:18-3.6-alpine
               
               # Wait for PostgreSQL to be ready (matches docker-compose healthcheck)
-              until docker exec postgres pg_isready -U postgres >/dev/null 2>&1; do
+              for _ in $(seq 1 60); do
+                docker exec postgres pg_isready -U postgres >/dev/null 2>&1 && break
                 echo "Waiting for PostgreSQL..."
                 sleep 2
               done
+              if ! docker exec postgres pg_isready -U postgres >/dev/null 2>&1; then
+                echo "PostgreSQL never became ready"
+                docker logs postgres 2>&1 | tail -30
+                exit 1
+              fi
               echo "PostgreSQL is ready"
               
               # get the data from four days ago to make sure there really are updates to apply
@@ -127,10 +133,16 @@ jobs:
                 postgis/postgis:18-3.6-alpine
               
               # Wait for PostgreSQL to be ready (matches docker-compose healthcheck)
-              until docker exec postgres pg_isready -U postgres >/dev/null 2>&1; do
+              for _ in $(seq 1 60); do
+                docker exec postgres pg_isready -U postgres >/dev/null 2>&1 && break
                 echo "Waiting for PostgreSQL..."
                 sleep 2
               done
+              if ! docker exec postgres pg_isready -U postgres >/dev/null 2>&1; then
+                echo "PostgreSQL never became ready"
+                docker logs postgres 2>&1 | tail -30
+                exit 1
+              fi
               echo "PostgreSQL is ready"
               
               docker run -i --rm --network nominatim-net2 \
@@ -162,14 +174,20 @@ jobs:
                 -e POSTGRES_PASSWORD=very_secure_password \
                 -e POSTGRES_USER=postgres \
                 -e POSTGRES_DB=nominatim \
-                -v postgres-data:/var/lib/postgresql/data \
+                -v postgres-data:/var/lib/postgresql \
                 postgis/postgis:18-3.6-alpine
               
               # Wait for PostgreSQL to be ready (matches docker-compose healthcheck)
-              until docker exec postgres pg_isready -U postgres >/dev/null 2>&1; do
+              for _ in $(seq 1 60); do
+                docker exec postgres pg_isready -U postgres >/dev/null 2>&1 && break
                 echo "Waiting for PostgreSQL..."
                 sleep 2
               done
+              if ! docker exec postgres pg_isready -U postgres >/dev/null 2>&1; then
+                echo "PostgreSQL never became ready"
+                docker logs postgres 2>&1 | tail -30
+                exit 1
+              fi
               echo "PostgreSQL is ready"
               
               # get the data from four days ago to make sure there really are updates to apply
@@ -227,14 +245,20 @@ jobs:
                 -e POSTGRES_PASSWORD=very_secure_password \
                 -e POSTGRES_USER=postgres \
                 -e POSTGRES_DB=nominatim \
-                -v postgres-data-update1:/var/lib/postgresql/data \
+                -v postgres-data-update1:/var/lib/postgresql \
                 postgis/postgis:18-3.6-alpine
               
               # Wait for PostgreSQL to be ready (matches docker-compose healthcheck)
-              until docker exec postgres pg_isready -U postgres >/dev/null 2>&1; do
+              for _ in $(seq 1 60); do
+                docker exec postgres pg_isready -U postgres >/dev/null 2>&1 && break
                 echo "Waiting for PostgreSQL..."
                 sleep 2
               done
+              if ! docker exec postgres pg_isready -U postgres >/dev/null 2>&1; then
+                echo "PostgreSQL never became ready"
+                docker logs postgres 2>&1 | tail -30
+                exit 1
+              fi
               echo "PostgreSQL is ready"
               
               # get the data from four days ago to make sure there really are updates to apply
@@ -287,14 +311,20 @@ jobs:
                 -e POSTGRES_PASSWORD=very_secure_password \
                 -e POSTGRES_USER=postgres \
                 -e POSTGRES_DB=nominatim \
-                -v postgres-data-update2:/var/lib/postgresql/data \
+                -v postgres-data-update2:/var/lib/postgresql \
                 postgis/postgis:18-3.6-alpine
               
               # Wait for PostgreSQL to be ready (matches docker-compose healthcheck)
-              until docker exec postgres pg_isready -U postgres >/dev/null 2>&1; do
+              for _ in $(seq 1 60); do
+                docker exec postgres pg_isready -U postgres >/dev/null 2>&1 && break
                 echo "Waiting for PostgreSQL..."
                 sleep 2
               done
+              if ! docker exec postgres pg_isready -U postgres >/dev/null 2>&1; then
+                echo "PostgreSQL never became ready"
+                docker logs postgres 2>&1 | tail -30
+                exit 1
+              fi
               echo "PostgreSQL is ready"
               
               # get the data from few days ago to make sure there really are updates to apply
@@ -350,10 +380,16 @@ jobs:
                 postgis/postgis:18-3.6-alpine
               
               # Wait for PostgreSQL to be ready (matches docker-compose healthcheck)
-              until docker exec postgres pg_isready -U postgres >/dev/null 2>&1; do
+              for _ in $(seq 1 60); do
+                docker exec postgres pg_isready -U postgres >/dev/null 2>&1 && break
                 echo "Waiting for PostgreSQL..."
                 sleep 2
               done
+              if ! docker exec postgres pg_isready -U postgres >/dev/null 2>&1; then
+                echo "PostgreSQL never became ready"
+                docker logs postgres 2>&1 | tail -30
+                exit 1
+              fi
               echo "PostgreSQL is ready"
               
               docker run -i --rm --network nominatim-net4 \
@@ -389,10 +425,16 @@ jobs:
                 postgis/postgis:18-3.6-alpine
               
               # Wait for PostgreSQL to be ready (matches docker-compose healthcheck)
-              until docker exec postgres pg_isready -U postgres >/dev/null 2>&1; do
+              for _ in $(seq 1 60); do
+                docker exec postgres pg_isready -U postgres >/dev/null 2>&1 && break
                 echo "Waiting for PostgreSQL..."
                 sleep 2
               done
+              if ! docker exec postgres pg_isready -U postgres >/dev/null 2>&1; then
+                echo "PostgreSQL never became ready"
+                docker logs postgres 2>&1 | tail -30
+                exit 1
+              fi
               echo "PostgreSQL is ready"
               
               docker run -i --rm --network nominatim-net5 \
@@ -428,10 +470,16 @@ jobs:
                 postgis/postgis:18-3.6-alpine
               
               # Wait for PostgreSQL to be ready (matches docker-compose healthcheck)
-              until docker exec postgres pg_isready -U postgres >/dev/null 2>&1; do
+              for _ in $(seq 1 60); do
+                docker exec postgres pg_isready -U postgres >/dev/null 2>&1 && break
                 echo "Waiting for PostgreSQL..."
                 sleep 2
               done
+              if ! docker exec postgres pg_isready -U postgres >/dev/null 2>&1; then
+                echo "PostgreSQL never became ready"
+                docker logs postgres 2>&1 | tail -30
+                exit 1
+              fi
               echo "PostgreSQL is ready"
               
               wget --cut-dirs=1 -nH -xP /tmp/data https://download.geofabrik.de/europe/monaco-latest.osm.pbf
@@ -468,10 +516,16 @@ jobs:
                 postgis/postgis:18-3.6-alpine
               
               # Wait for PostgreSQL to be ready (matches docker-compose healthcheck)
-              until docker exec postgres pg_isready -U postgres >/dev/null 2>&1; do
+              for _ in $(seq 1 60); do
+                docker exec postgres pg_isready -U postgres >/dev/null 2>&1 && break
                 echo "Waiting for PostgreSQL..."
                 sleep 2
               done
+              if ! docker exec postgres pg_isready -U postgres >/dev/null 2>&1; then
+                echo "PostgreSQL never became ready"
+                docker logs postgres 2>&1 | tail -30
+                exit 1
+              fi
               echo "PostgreSQL is ready"
               
               docker run -i --rm --network nominatim-net7 \
@@ -505,10 +559,16 @@ jobs:
                 postgis/postgis:18-3.6-alpine
               
               # Wait for PostgreSQL to be ready (matches docker-compose healthcheck)
-              until docker exec postgres pg_isready -U postgres >/dev/null 2>&1; do
+              for _ in $(seq 1 60); do
+                docker exec postgres pg_isready -U postgres >/dev/null 2>&1 && break
                 echo "Waiting for PostgreSQL..."
                 sleep 2
               done
+              if ! docker exec postgres pg_isready -U postgres >/dev/null 2>&1; then
+                echo "PostgreSQL never became ready"
+                docker logs postgres 2>&1 | tail -30
+                exit 1
+              fi
               echo "PostgreSQL is ready"
               
               docker run -i --rm --network nominatim-net8 \
@@ -543,10 +603,16 @@ jobs:
                 postgis/postgis:18-3.6-alpine
               
               # Wait for PostgreSQL to be ready (matches docker-compose healthcheck)
-              until docker exec postgres pg_isready -U postgres >/dev/null 2>&1; do
+              for _ in $(seq 1 60); do
+                docker exec postgres pg_isready -U postgres >/dev/null 2>&1 && break
                 echo "Waiting for PostgreSQL..."
                 sleep 2
               done
+              if ! docker exec postgres pg_isready -U postgres >/dev/null 2>&1; then
+                echo "PostgreSQL never became ready"
+                docker logs postgres 2>&1 | tail -30
+                exit 1
+              fi
               echo "PostgreSQL is ready"
               
               docker run -i --rm --network nominatim-net9 \
@@ -585,10 +651,16 @@ jobs:
                 postgis/postgis:18-3.6-alpine
               
               # Wait for PostgreSQL to be ready (matches docker-compose healthcheck)
-              until docker exec postgres pg_isready -U postgres >/dev/null 2>&1; do
+              for _ in $(seq 1 60); do
+                docker exec postgres pg_isready -U postgres >/dev/null 2>&1 && break
                 echo "Waiting for PostgreSQL..."
                 sleep 2
               done
+              if ! docker exec postgres pg_isready -U postgres >/dev/null 2>&1; then
+                echo "PostgreSQL never became ready"
+                docker logs postgres 2>&1 | tail -30
+                exit 1
+              fi
               echo "PostgreSQL is ready"
               
               docker run -i --rm --network nominatim-net10 \
@@ -623,10 +695,16 @@ jobs:
                 postgis/postgis:18-3.6-alpine
               
               # Wait for PostgreSQL to be ready (matches docker-compose healthcheck)
-              until docker exec postgres pg_isready -U postgres >/dev/null 2>&1; do
+              for _ in $(seq 1 60); do
+                docker exec postgres pg_isready -U postgres >/dev/null 2>&1 && break
                 echo "Waiting for PostgreSQL..."
                 sleep 2
               done
+              if ! docker exec postgres pg_isready -U postgres >/dev/null 2>&1; then
+                echo "PostgreSQL never became ready"
+                docker logs postgres 2>&1 | tail -30
+                exit 1
+              fi
               echo "PostgreSQL is ready"
               
               docker run --detach --network nominatim-net11 \
@@ -666,10 +744,16 @@ jobs:
                 postgis/postgis:18-3.6-alpine
               
               # Wait for PostgreSQL to be ready (matches docker-compose healthcheck)
-              until docker exec postgres pg_isready -U postgres >/dev/null 2>&1; do
+              for _ in $(seq 1 60); do
+                docker exec postgres pg_isready -U postgres >/dev/null 2>&1 && break
                 echo "Waiting for PostgreSQL..."
                 sleep 2
               done
+              if ! docker exec postgres pg_isready -U postgres >/dev/null 2>&1; then
+                echo "PostgreSQL never became ready"
+                docker logs postgres 2>&1 | tail -30
+                exit 1
+              fi
               echo "PostgreSQL is ready"
               
               docker run -i --rm --network nominatim-net12 \
@@ -705,10 +789,16 @@ jobs:
                 postgis/postgis:18-3.6-alpine
               
               # Wait for PostgreSQL to be ready (matches docker-compose healthcheck)
-              until docker exec postgres pg_isready -U postgres >/dev/null 2>&1; do
+              for _ in $(seq 1 60); do
+                docker exec postgres pg_isready -U postgres >/dev/null 2>&1 && break
                 echo "Waiting for PostgreSQL..."
                 sleep 2
               done
+              if ! docker exec postgres pg_isready -U postgres >/dev/null 2>&1; then
+                echo "PostgreSQL never became ready"
+                docker logs postgres 2>&1 | tail -30
+                exit 1
+              fi
               echo "PostgreSQL is ready"
               
               docker run -i --rm --network nominatim-net13 \
@@ -744,10 +834,16 @@ jobs:
                 postgis/postgis:18-3.6-alpine
               
               # Wait for PostgreSQL to be ready (matches docker-compose healthcheck)
-              until docker exec postgres pg_isready -U postgres >/dev/null 2>&1; do
+              for _ in $(seq 1 60); do
+                docker exec postgres pg_isready -U postgres >/dev/null 2>&1 && break
                 echo "Waiting for PostgreSQL..."
                 sleep 2
               done
+              if ! docker exec postgres pg_isready -U postgres >/dev/null 2>&1; then
+                echo "PostgreSQL never became ready"
+                docker logs postgres 2>&1 | tail -30
+                exit 1
+              fi
               echo "PostgreSQL is ready"
               
               docker run -i --rm --network nominatim-net14 \
