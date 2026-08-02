@@ -34,7 +34,7 @@ test: ## Run Go unit tests
 	$(GO_RUN) go test -count=1 ./...
 
 lint: ## Shell and Dockerfile linting
-	docker run --rm -v $(PWD):/mnt -w /mnt koalaman/shellcheck:stable test/integration.sh
+	docker run --rm -v $(PWD):/mnt -w /mnt koalaman/shellcheck:stable test/integration.sh   # default severity, same as CI
 	docker run --rm -i hadolint/hadolint < Dockerfile
 
 build: ## Build the container image

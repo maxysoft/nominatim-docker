@@ -185,6 +185,7 @@ scenario_security() {
   # resolves UIDs against the *host* passwd file, so it reports whatever the
   # host calls uid 1000 rather than "nominatim".
   local api_uid
+  # shellcheck disable=SC2016  # $d must expand in the container's shell, not here
   api_uid=$($COMPOSE exec -T nominatim sh -c \
     'for d in /proc/[0-9]*; do if grep -qa gunicorn "$d/cmdline" 2>/dev/null; then stat -c %u "$d"; break; fi; done' \
     2>/dev/null | tr -d '[:space:]' || true)

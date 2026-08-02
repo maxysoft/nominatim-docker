@@ -258,8 +258,22 @@ jobs:
               ./assert-non-empty-json "http://localhost:8020/status.php?format=json"
               # Replication output goes to the container's stdout now, not to an
               # unrotated /var/log/replication.log inside the container.
+              # Polled rather than `docker logs -f | grep -m1`: that pipeline
+              # reports the timeout's exit status even when it matches.
               echo -n "check replication log for Update completed. Count:"
-              timeout 300 docker logs -f nominatim 2>&1 | grep -m 1 -c "Update completed."
+              replicated=0
+              for _ in $(seq 1 60); do
+                if docker logs nominatim 2>&1 | grep -c "Update completed."; then
+                  replicated=1
+                  break
+                fi
+                sleep 5
+              done
+              if [ "$replicated" -ne 1 ]; then
+                echo "replication never reported completion"
+                docker logs --tail 50 nominatim
+                exit 1
+              fi
               
               # Cleanup
               docker stop nominatim postgres || true
@@ -304,8 +318,22 @@ jobs:
               ./assert-non-empty-json "http://localhost:8021/status.php?format=json"
               # Replication output goes to the container's stdout now, not to an
               # unrotated /var/log/replication.log inside the container.
+              # Polled rather than `docker logs -f | grep -m1`: that pipeline
+              # reports the timeout's exit status even when it matches.
               echo -n "check replication log for Update completed. Count:"
-              timeout 300 docker logs -f nominatim 2>&1 | grep -m 1 -c "Update completed."
+              replicated=0
+              for _ in $(seq 1 60); do
+                if docker logs nominatim 2>&1 | grep -c "Update completed."; then
+                  replicated=1
+                  break
+                fi
+                sleep 5
+              done
+              if [ "$replicated" -ne 1 ]; then
+                echo "replication never reported completion"
+                docker logs --tail 50 nominatim
+                exit 1
+              fi
               
               # Cleanup
               docker stop nominatim postgres || true
@@ -537,7 +565,9 @@ jobs:
 
               ./assert-non-empty-json "http://localhost:8010/search.php?postalcode=LE15+8TX"
               ./assert-non-empty-json "http://localhost:8010/status.php?format=json"
-              ./assert-non-empty-json "http://localhost:8010/search.php?postalcode=PE9+3SY"
+              # PE9 3SY was retired from the ONS dataset and is absent from the current
+              # gb_postcodes.csv.gz; PE9 3AL is the nearest surviving PE9 3* postcode.
+              ./assert-non-empty-json "http://localhost:8010/search.php?postalcode=PE9+3AL"
               ./assert-non-empty-json "http://localhost:8010/search.php?postalcode=PE9+4ES"
               
               # Cleanup
