@@ -66,14 +66,23 @@ func EnsureRole(ctx context.Context, conn *pgx.Conn, role, password string, extr
 	}
 
 	var exists bool
-	if err := conn.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $1)", role).Scan(&exists); err != nil {
-		return fmt.Errorf("checking role %q: %w", role, err)
+	if qErr := conn.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $1)", role).Scan(&exists); qErr != nil {
+		return fmt.Errorf("checking role %q: %w", role, qErr)
 	}
 
 	ident := QuoteIdentifier(role)
+	secret, hashed, err := passwordSecret(password)
+	if err != nil {
+		return err
+	}
+	if !hashed {
+		Logf("WARNING: password for role %q is not printable ASCII; sending it to the server "+
+			"in cleartext, where log_statement=ddl|all would record it", role)
+	}
+
 	if !exists {
 		Logf("creating role %s", role)
-		stmt := fmt.Sprintf("CREATE ROLE %s LOGIN PASSWORD %s", ident, QuoteLiteral(password))
+		stmt := fmt.Sprintf("CREATE ROLE %s LOGIN PASSWORD %s", ident, secret)
 		if extraOptions != "" {
 			stmt += " " + extraOptions
 		}
@@ -97,7 +106,7 @@ func EnsureRole(ctx context.Context, conn *pgx.Conn, role, password string, extr
 
 	// Managed role: keep the password in step with the environment so that
 	// rotating NOMINATIM_PASSWORD actually takes effect.
-	if _, err := conn.Exec(ctx, fmt.Sprintf("ALTER ROLE %s PASSWORD %s", ident, QuoteLiteral(password))); err != nil {
+	if _, err := conn.Exec(ctx, fmt.Sprintf("ALTER ROLE %s PASSWORD %s", ident, secret)); err != nil {
 		return fmt.Errorf("updating password for role %q: %w", role, err)
 	}
 	// Reconcile attributes as well, otherwise NOMINATIM_ROLE_OPTIONS would only

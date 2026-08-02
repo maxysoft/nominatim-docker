@@ -55,6 +55,7 @@ local socket that does not exist in this image.
 | Import marker | File in a different volume from the data | A `COMMENT ON DATABASE` written only after the import succeeds |
 | Privilege drop | `sudo -E -u nominatim` (setuid-root binary in the image) | `SysProcAttr.Credential` — a direct fork+setuid, no setuid binary anywhere |
 | Database access | 9 `psql -c "…${VAR}…"` string interpolations | `pgx` with bind parameters; quoted identifiers and literals where PostgreSQL forbids parameters |
+| Setting role passwords | `ALTER USER … PASSWORD '<cleartext>'`, logged verbatim by the server | Client-computed SCRAM-SHA-256 verifier; the password never leaves the entrypoint |
 | Supplementary data | `sshpass -p <password> scp -o StrictHostKeyChecking=no` | HTTPS against the system CA bundle, optional SHA-256 |
 | API supervision | `--daemon` + PID-file polling + unconditional `exit 0` | Foreground child, `cmd.Wait()`, real exit code propagated |
 | Shutdown | Trap deferred behind `sleep 5`; kill then immediate exit | Signal wakes the select immediately; SIGTERM, drain, escalate to SIGKILL at 35 s |
@@ -155,8 +156,9 @@ an explanation.
 (present in the DSN and every driver connection); secrets are redacted from
 everything the entrypoint itself logs, so `DEBUG_MODE` no longer echoes passwords
 — though child output (Gunicorn, osm2pgsql, Python tracebacks) passes through
-unfiltered, and `ALTER ROLE … PASSWORD` still reaches the PostgreSQL server log
-when `log_statement` is `ddl` or `all`; `.env` is chmod-ed to `0600` on every
+unfiltered; role passwords are set with a client-computed SCRAM-SHA-256 verifier
+rather than a cleartext `ALTER ROLE … PASSWORD`, so the password itself never
+reaches the server or its statement log; `.env` is chmod-ed to `0600` on every
 write, including one left at `0644` on a volume by an older image; the web role
 has its own `NOMINATIM_WEBUSER_PASSWORD` so leaking the API's DSN does not also
 hand over the `CREATEDB` role; every setuid and setgid bit in the image is stripped at build time,
@@ -287,9 +289,11 @@ bug, cgroup CPU parsing, secret redaction, and configuration validation.
 
 Deliberately not addressed, listed so they are not mistaken for oversights:
 
-- **The role password still reaches the PostgreSQL server log.** `ALTER ROLE …
-  PASSWORD '<literal>'` is logged verbatim when `log_statement` is `ddl` or `all`.
-  Closing this needs a pre-computed SCRAM-SHA-256 verifier.
+- **A non-printable-ASCII password is still sent in cleartext.** SASLprep is the
+  identity only for printable ASCII, so for anything else the verifier is computed
+  server-side from a cleartext `ALTER ROLE`. The entrypoint warns when it takes
+  that path. Printable-ASCII passwords — which is what `contrib/.env.example`
+  generates — never leave this process.
 - **Child process output is not redacted.** Only what the entrypoint itself logs
   passes through the filter; a Python traceback from Nominatim could still print a
   DSN.
