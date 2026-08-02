@@ -5,6 +5,67 @@ import (
 	"testing"
 )
 
+// A password reaching ALTER ROLE unescaped was arbitrary SQL execution as the
+// PostgreSQL superuser.
+func TestQuoteLiteral(t *testing.T) {
+	cases := map[string]string{
+		"simple": "'simple'",
+		"pa'ss":  "'pa''ss'",
+		`x'; ALTER ROLE postgres PASSWORD 'owned'; --`: `'x''; ALTER ROLE postgres PASSWORD ''owned''; --'`,
+		`back\slash`: `E'back\\slash'`,
+		"":           "''",
+	}
+	for in, want := range cases {
+		if got := QuoteLiteral(in); got != want {
+			t.Errorf("QuoteLiteral(%q) = %s, want %s", in, got, want)
+		}
+	}
+}
+
+// An unquoted ${POSTGRES_DB} both folded case (dropping the wrong database) and
+// allowed a second statement to be appended.
+func TestQuoteIdentifier(t *testing.T) {
+	cases := map[string]string{
+		"nominatim":                      `"nominatim"`,
+		"My-DB":                          `"My-DB"`,
+		`nominatim"; DROP DATABASE prod`: `"nominatim""; DROP DATABASE prod"`,
+	}
+	for in, want := range cases {
+		if got := QuoteIdentifier(in); got != want {
+			t.Errorf("QuoteIdentifier(%q) = %s, want %s", in, got, want)
+		}
+	}
+}
+
+func TestMustNotBeEmpty(t *testing.T) {
+	if err := mustNotBeEmpty("POSTGRES_DB", ""); err == nil {
+		t.Fatal("empty value accepted")
+	}
+	if err := mustNotBeEmpty("POSTGRES_DB", "   "); err == nil {
+		t.Fatal("whitespace-only value accepted")
+	}
+	if err := mustNotBeEmpty("POSTGRES_DB", "nominatim"); err != nil {
+		t.Fatalf("valid value rejected: %v", err)
+	}
+}
+
+// A connection left by a previous container used to make a re-import fail with
+// "is being accessed by other users"; FORCE terminates those backends.
+func TestDropDatabaseSQL(t *testing.T) {
+	cases := map[bool]string{
+		true:  `DROP DATABASE IF EXISTS "nominatim" WITH (FORCE)`,
+		false: `DROP DATABASE IF EXISTS "nominatim"`,
+	}
+	for force, want := range cases {
+		if got := dropDatabaseSQL("nominatim", force); got != want {
+			t.Errorf("dropDatabaseSQL(force=%v) = %q, want %q", force, got, want)
+		}
+	}
+	if got := dropDatabaseSQL(`x"; DROP DATABASE prod`, true); got != `DROP DATABASE IF EXISTS "x""; DROP DATABASE prod" WITH (FORCE)` {
+		t.Errorf("identifier not quoted under FORCE: %s", got)
+	}
+}
+
 // Cross-checked against an independent implementation (Python hashlib/hmac)
 // rather than against this package's own output, so a mistake in the algorithm
 // cannot make the test pass alongside it.
@@ -12,7 +73,10 @@ func TestScramVerifierMatchesReferenceImplementation(t *testing.T) {
 	const want = "SCRAM-SHA-256$4096:MDEyMzQ1Njc4OWFiY2RlZg==$" +
 		"ZIQVNqStZRzlOhIpyOxF6+ntWHcrs3R/7ZWYkCqWWoc=:2ieFiDOjSo2BYGVmJhMdwofseSoibXz2jJQZfuPwDxA="
 
-	got := ScramVerifier("s3cret-password", []byte("0123456789abcdef"), 4096)
+	got, err := ScramVerifier("s3cret-password", []byte("0123456789abcdef"), 4096)
+	if err != nil {
+		t.Fatalf("ScramVerifier: %v", err)
+	}
 	if got != want {
 		t.Fatalf("verifier mismatch\n got: %s\nwant: %s", got, want)
 	}
@@ -20,15 +84,21 @@ func TestScramVerifierMatchesReferenceImplementation(t *testing.T) {
 
 func TestScramVerifierIsDeterministicForAGivenSalt(t *testing.T) {
 	salt := []byte("fixed-salt-16byt")
-	a := ScramVerifier("pw", salt, scramIterations)
-	b := ScramVerifier("pw", salt, scramIterations)
-	if a != b {
+	mk := func(pw string, s []byte) string {
+		v, err := ScramVerifier(pw, s, scramIterations)
+		if err != nil {
+			t.Fatalf("ScramVerifier: %v", err)
+		}
+		return v
+	}
+	a := mk("pw", salt)
+	if b := mk("pw", salt); a != b {
 		t.Fatal("verifier is not deterministic for a fixed salt")
 	}
-	if c := ScramVerifier("pw", []byte("different-salt16"), scramIterations); c == a {
+	if c := mk("pw", []byte("different-salt16")); c == a {
 		t.Fatal("a different salt produced the same verifier")
 	}
-	if c := ScramVerifier("other", salt, scramIterations); c == a {
+	if c := mk("other", salt); c == a {
 		t.Fatal("a different password produced the same verifier")
 	}
 }
@@ -98,8 +168,8 @@ func TestVerifierUsesPreparedPassword(t *testing.T) {
 	salt := []byte("0123456789abcdef")
 	// These two differ only by a SOFT HYPHEN, which SASLprep removes, so both
 	// must yield the same verifier.
-	a := ScramVerifier(saslprep("I\u00ADX"), salt, scramIterations)
-	b := ScramVerifier(saslprep("IX"), salt, scramIterations)
+	a, _ := ScramVerifier(saslprep("I\u00ADX"), salt, scramIterations)
+	b, _ := ScramVerifier(saslprep("IX"), salt, scramIterations)
 	if a != b {
 		t.Fatal("SASLprep was not applied before hashing")
 	}

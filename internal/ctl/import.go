@@ -110,13 +110,13 @@ func fetchDatasets(ctx context.Context, c *Config, dl *Downloader) error {
 // administrative credentials. The application role is deliberately not a
 // superuser.
 func provisionDatabase(ctx context.Context, c *Config) error {
-	adminURL := c.LibpqURL(c.AdminUser, c.AdminPassword, "postgres")
+	adminURL := c.LibpqURL(adminUser, c.AdminPassword, "postgres")
 	Logf("waiting for PostgreSQL at %s:%d", c.PostgresHost, c.PostgresPort)
 	if err := WaitForDatabase(ctx, adminURL, 150, 2*time.Second); err != nil {
 		return err
 	}
 
-	hasData, err := HasNominatimData(ctx, c.LibpqURL(c.AdminUser, c.AdminPassword, c.PostgresDB))
+	hasData, err := HasNominatimData(ctx, c.LibpqURL(adminUser, c.AdminPassword, c.PostgresDB))
 	if err != nil {
 		return err
 	}
@@ -147,7 +147,7 @@ func provisionDatabase(ctx context.Context, c *Config) error {
 		// Installed into template1 so the database the application role creates
 		// inherits them; Nominatim's own CREATE EXTENSION IF NOT EXISTS then
 		// short-circuits instead of demanding superuser.
-		if err := ProvisionExtensions(ctx, c.LibpqURL(c.AdminUser, c.AdminPassword, "template1")); err != nil {
+		if err := ProvisionExtensions(ctx, c.LibpqURL(adminUser, c.AdminPassword, "template1")); err != nil {
 			return fmt.Errorf("installing PostGIS into template1 (set PROVISION_EXTENSIONS=false if your "+
 				"provider manages extensions, or NOMINATIM_ROLE_OPTIONS=SUPERUSER to let the import do it): %w", err)
 		}

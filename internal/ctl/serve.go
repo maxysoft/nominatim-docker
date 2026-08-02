@@ -12,6 +12,9 @@ import (
 	"time"
 )
 
+// nominatimHome matches the account created in the Dockerfile.
+const nominatimHome = "/var/lib/nominatim"
+
 // BaseEnv is the environment handed to every child process.
 //
 // It is an explicit allow-list plus every NOMINATIM_* and PG* variable present
@@ -22,7 +25,7 @@ import (
 func BaseEnv(c *Config) []string {
 	env := []string{
 		"PATH=" + envOr("PATH", "/usr/local/bin:/usr/bin:/bin"),
-		"HOME=" + envOr("NOMINATIM_HOME", "/var/lib/nominatim"),
+		"HOME=" + nominatimHome,
 		"LANG=C.UTF-8",
 		"LC_ALL=C.UTF-8",
 		"PYTHONUNBUFFERED=1",
@@ -115,7 +118,7 @@ func ensureImported(ctx context.Context, c *Config, r *Runner) error {
 	// Reach the server first, using whichever credentials exist.
 	probeURL := c.LibpqURL("nominatim", c.NominatimPassword, c.PostgresDB)
 	if haveAdmin {
-		probeURL = c.LibpqURL(c.AdminUser, c.AdminPassword, "postgres")
+		probeURL = c.LibpqURL(adminUser, c.AdminPassword, "postgres")
 	}
 	Logf("waiting for PostgreSQL at %s:%d", c.PostgresHost, c.PostgresPort)
 	if err := WaitForDatabase(ctx, probeURL, 150, 2*time.Second); err != nil {
@@ -127,7 +130,7 @@ func ensureImported(ctx context.Context, c *Config, r *Runner) error {
 
 	targetURL := c.LibpqURL("nominatim", c.NominatimPassword, c.PostgresDB)
 	if haveAdmin {
-		targetURL = c.LibpqURL(c.AdminUser, c.AdminPassword, c.PostgresDB)
+		targetURL = c.LibpqURL(adminUser, c.AdminPassword, c.PostgresDB)
 	}
 
 	complete, err := ImportComplete(ctx, targetURL, c.PostgresDB)
@@ -221,7 +224,7 @@ func runGunicorn(ctx context.Context, c *Config, r *Runner, replication *exec.Cm
 		"--bind", c.GunicornBind,
 		"--workers", fmt.Sprint(c.GunicornWorkers),
 		"--worker-class", "asgi",
-		"--worker-tmp-dir", envOr("GUNICORN_WORKER_TMP_DIR", "/dev/shm"),
+		"--worker-tmp-dir", "/dev/shm",
 		"--access-logfile", "-",
 		"--error-logfile", "-",
 		"--enable-stdio-inheritance",
@@ -231,9 +234,9 @@ func runGunicorn(ctx context.Context, c *Config, r *Runner, replication *exec.Cm
 		"--graceful-timeout", envOr("GUNICORN_GRACEFUL_TIMEOUT", "30"),
 		"--keep-alive", "5",
 		"--limit-request-line", "8190",
-		"--limit-request-fields", envOr("GUNICORN_LIMIT_REQUEST_FIELDS", "100"),
+		"--limit-request-fields", "100",
 		"--limit-request-field_size", "8190",
-		"--max-requests", envOr("GUNICORN_MAX_REQUESTS", "10000"),
+		"--max-requests", "10000",
 		"--max-requests-jitter", "1000",
 		"nominatim_api.server.falcon.server:run_wsgi()",
 	}

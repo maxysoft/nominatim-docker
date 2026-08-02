@@ -65,10 +65,15 @@ local socket that does not exist in this image.
 | Failure modes | Three unbounded `until` loops with stderr discarded | Bounded retries that report the real driver error and exit non-zero |
 
 `config.sh` + `init.sh` + `start.sh` (439 lines of bash, ~20% of it duplicated
-verbatim between two files) become 1697 lines of Go — 3.5× more code —
-plus 27 unit tests (29 cases including subtests). The line count goes up substantially; what goes down is
-the number of ways to be silently wrong. That trade is the whole argument, and
-it is worth stating honestly rather than dressing up as a reduction.
+verbatim between two files) become 2043 lines of Go — 3.5× more code —
+plus 53 test cases. The line count goes up substantially; what goes down is the
+number of ways to be silently wrong. That trade is the whole argument, and it is
+worth stating honestly rather than dressing up as a reduction.
+
+The code lives in seven files under `internal/ctl` plus `cmd/nominatim-ctl`.
+Roughly a quarter of it implements things the shell never did at all — the SCRAM
+verifier, log redaction, download retry, cgroup-aware sizing, the ownership
+check — so the like-for-like portion is nearer 1,500 lines.
 
 **On reaping.** An earlier draft of this refactor ran a `Wait4(-1, WNOHANG)`
 reaper when PID 1. That is unsafe in Go: it races `exec.Cmd.Wait` for the exit
@@ -214,11 +219,8 @@ are pinned to commit SHAs and the workflow has a least-privilege
 | `API_DB_USER` | `www-data` | Database role the API connects as |
 | `GUNICORN_BIND` | `0.0.0.0:8080` | Bind address |
 | `GUNICORN_TIMEOUT`, `GUNICORN_GRACEFUL_TIMEOUT` | `60`, `30` | Request and drain deadlines |
-| `POSTGRES_ADMIN_USER` | `postgres` | Administrative role name |
 | `NOMINATIM_WEBUSER_PASSWORD` | falls back to `NOMINATIM_PASSWORD` | Separate password for the read-only API role |
 | `FIX_VOLUME_OWNERSHIP` | `false` | Recursively take ownership of the project directory, for migrating a volume from the old image |
-| `GUNICORN_MAX_REQUESTS`, `GUNICORN_WORKER_TMP_DIR`, `GUNICORN_LIMIT_REQUEST_FIELDS` | `10000`, `/dev/shm`, `100` | Override the new Gunicorn defaults |
-| `SHUTDOWN_GRACE` | `35s` | How long a child may take to exit after SIGTERM |
 | `NOMINATIM_WEBUSER` | `www-data` | Read-only role name |
 
 **Removed:** `STORAGE_USER`, `STORAGE_HOST`, `STORAGE_PASSWORD` — superseded by
@@ -262,7 +264,9 @@ are pinned to commit SHAs and the workflow has a least-privilege
     (worker recycling, which bounds memory growth on a long-running planet
     instance), `--timeout 60`, `--graceful-timeout 30`, `--keep-alive 5` and
     request-size limits. `--worker-tmp-dir` moved from `/tmp` to `/dev/shm`.
-    All are overridable — see `GUNICORN_*` in the table above.
+    `GUNICORN_BIND`, `GUNICORN_TIMEOUT` and `GUNICORN_GRACEFUL_TIMEOUT` are
+    configurable; the rest are fixed, because no deployment has needed to change
+    them and every knob is surface to maintain.
 12. **`template1` is modified on first import** unless `PROVISION_EXTENSIONS=false`
     or the role is a superuser. Only genuinely missing extensions are installed,
     and the entrypoint logs when it does so.

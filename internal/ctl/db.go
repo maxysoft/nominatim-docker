@@ -2,10 +2,18 @@ package ctl
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/pbkdf2"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"fmt"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/xdg-go/stringprep"
 )
 
 // roleMarker tags the roles this image manages, so a shared PostgreSQL server
@@ -276,4 +284,104 @@ func Analyze(ctx context.Context, url string) error {
 	defer conn.Close(ctx)
 	_, err = conn.Exec(ctx, "ANALYZE")
 	return err
+}
+
+// QuoteLiteral renders s as a PostgreSQL string literal.
+//
+// CREATE ROLE / ALTER ROLE ... PASSWORD cannot take a bind parameter, so the
+// value has to be quoted by hand. A password containing a single quote would
+// otherwise terminate the literal and let the remainder execute as SQL.
+func QuoteLiteral(s string) string {
+	escaped := strings.ReplaceAll(s, `'`, `''`)
+	if strings.Contains(s, `\`) {
+		// E'' strings treat backslash as an escape character, so it must be
+		// doubled; the E prefix is required for the parser to accept it at all.
+		return "E'" + strings.ReplaceAll(escaped, `\`, `\\`) + "'"
+	}
+	return "'" + escaped + "'"
+}
+
+// QuoteIdentifier renders s as a PostgreSQL quoted identifier. Quoting also
+// preserves case, so POSTGRES_DB=MyDB refers to "MyDB" rather than folding to
+// mydb and acting on a different database.
+func QuoteIdentifier(s string) string {
+	return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
+}
+
+// urlEscape percent-encodes a component of a postgres:// URL.
+//
+// QueryEscape is wrong here: it encodes a space as "+", and the userinfo decoder
+// in net/url does not map "+" back to a space. A password containing a space
+// would be set correctly on the role and then fail every subsequent login.
+func urlEscape(s string) string { return url.PathEscape(s) }
+
+// mustNotBeEmpty is a small guard used where an empty identifier would produce
+// syntactically valid but catastrophic SQL (e.g. DROP DATABASE "").
+func mustNotBeEmpty(field, value string) error {
+	if strings.TrimSpace(value) == "" {
+		return fmt.Errorf("%s must not be empty", field)
+	}
+	return nil
+}
+
+// scramIterations is PostgreSQL's own default for password_encryption.
+const scramIterations = 4096
+
+// ScramVerifier builds the value PostgreSQL stores in pg_authid.rolpassword.
+//
+// `ALTER ROLE x PASSWORD 'cleartext'` sends the password to the server, which
+// logs it verbatim when log_statement is 'ddl' or 'all' — on a managed provider
+// that log is often shipped to a shared sink and retained for months. Computing
+// the verifier here sends only a salted hash, which is what the server would
+// have derived and stored anyway.
+//
+// Format: SCRAM-SHA-256$<iterations>:<salt>$<StoredKey>:<ServerKey>, per
+// RFC 5802 with PostgreSQL's encoding.
+func ScramVerifier(password string, salt []byte, iterations int) (string, error) {
+	// crypto/pbkdf2 is stdlib as of Go 1.24, so x/crypto is no longer needed.
+	saltedPassword, err := pbkdf2.Key(sha256.New, password, salt, iterations, sha256.Size)
+	if err != nil {
+		return "", fmt.Errorf("deriving SCRAM key: %w", err)
+	}
+
+	clientKey := hmacSHA256(saltedPassword, []byte("Client Key"))
+	storedKey := sha256.Sum256(clientKey)
+	serverKey := hmacSHA256(saltedPassword, []byte("Server Key"))
+
+	b64 := base64.StdEncoding.EncodeToString
+	return fmt.Sprintf("SCRAM-SHA-256$%d:%s$%s:%s",
+		iterations, b64(salt), b64(storedKey[:]), b64(serverKey)), nil
+}
+
+func hmacSHA256(key, msg []byte) []byte {
+	m := hmac.New(sha256.New, key)
+	m.Write(msg)
+	return m.Sum(nil)
+}
+
+// saslprep normalises a password the way PostgreSQL does before hashing it.
+//
+// The server runs RFC 4013 SASLprep and, if that fails, falls back to the raw
+// bytes (see pg_saslprep). Mirroring both halves is what lets the verifier
+// computed here authenticate for any password, not just printable ASCII.
+func saslprep(password string) string {
+	prepped, err := stringprep.SASLprep.Prepare(password)
+	if err != nil {
+		return password
+	}
+	return prepped
+}
+
+// passwordSecret renders the value for a CREATE/ALTER ROLE ... PASSWORD clause.
+// The cleartext never appears in it.
+func passwordSecret(password string) (sql string, err error) {
+	salt := make([]byte, 16)
+	if _, err := rand.Read(salt); err != nil {
+		return "", fmt.Errorf("generating SCRAM salt: %w", err)
+	}
+	verifier, err := ScramVerifier(saslprep(password), salt, scramIterations)
+	if err != nil {
+		return "", err
+	}
+	return QuoteLiteral(verifier), nil
 }
