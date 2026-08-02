@@ -32,7 +32,11 @@ jobs:
 
   build:
     name: Build docker image
-    if: ${{ !contains(github.event.head_commit.message, 'skip_build') }}
+    # Requires the bracketed marker. A bare `skip_build` matches anywhere in the
+    # message, including the body, so a commit that merely mentions the flag
+    # silently skips the whole matrix — and the run still reports green, because
+    # skipped jobs do not fail. That hid a broken CI from 2026-04-22 onwards.
+    if: ${{ !contains(github.event.head_commit.message, '[skip_build]') }}
 
     runs-on: ubuntu-latest
     outputs:
