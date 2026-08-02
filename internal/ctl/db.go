@@ -150,13 +150,30 @@ func DropDatabase(ctx context.Context, conn *pgx.Conn, dbname string, hasData, a
 	if hasData {
 		Logf("WARNING: ALLOW_DROP_EXISTING_DB=true — dropping populated database %q", dbname)
 	}
+	// A connection left behind by a previous container makes a plain DROP fail
+	// with "is being accessed by other users". FORCE terminates those backends;
+	// it needs PostgreSQL 13+, so fall back when the server is older.
+	force := false
+	var verNum int
+	if err := conn.QueryRow(ctx, "SHOW server_version_num").Scan(&verNum); err == nil && verNum >= 130000 {
+		force = true
+	}
 	// The identifier is quoted: an unquoted ${POSTGRES_DB} both folds case and
 	// allows a second statement to be appended.
-	_, err := conn.Exec(ctx, "DROP DATABASE IF EXISTS "+QuoteIdentifier(dbname))
-	if err != nil {
+	if _, err := conn.Exec(ctx, dropDatabaseSQL(dbname, force)); err != nil {
 		return fmt.Errorf("dropping database %q: %w", dbname, err)
 	}
 	return nil
+}
+
+// dropDatabaseSQL builds the DROP statement. Split out so the quoting and the
+// FORCE selection are testable without a server.
+func dropDatabaseSQL(dbname string, force bool) string {
+	stmt := "DROP DATABASE IF EXISTS " + QuoteIdentifier(dbname)
+	if force {
+		stmt += " WITH (FORCE)"
+	}
+	return stmt
 }
 
 // ProvisionExtensions installs the extensions Nominatim requires.

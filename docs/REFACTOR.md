@@ -296,11 +296,6 @@ Deliberately not addressed, listed so they are not mistaken for oversights:
 - **`PROVISION_EXTENSIONS` defaults to `true`**, which mutates `template1`
   cluster-wide on first import. Convenient for a dedicated server, wrong for a
   shared one — set it to `false` there.
-- **`DROP DATABASE` does not use `WITH (FORCE)`**, so a lingering connection from a
-  previous container makes a re-import fail with "is being accessed by other users".
-- **Downloads do not retry** on a mid-transfer network error, and resume does not
-  validate the `Content-Range` start offset. Both matter mainly for a 1.5 TB planet
-  file over a flaky link.
 - **`PyICU` is source-only on PyPI**, so the `linux/arm64` leg of the publish job
   compiles a C++ extension under QEMU and is slow. `master` used Debian's prebuilt
   `python3-icu`.

@@ -45,3 +45,20 @@ func TestMustNotBeEmpty(t *testing.T) {
 		t.Fatalf("valid value rejected: %v", err)
 	}
 }
+
+// A connection left by a previous container used to make a re-import fail with
+// "is being accessed by other users"; FORCE terminates those backends.
+func TestDropDatabaseSQL(t *testing.T) {
+	cases := map[bool]string{
+		true:  `DROP DATABASE IF EXISTS "nominatim" WITH (FORCE)`,
+		false: `DROP DATABASE IF EXISTS "nominatim"`,
+	}
+	for force, want := range cases {
+		if got := dropDatabaseSQL("nominatim", force); got != want {
+			t.Errorf("dropDatabaseSQL(force=%v) = %q, want %q", force, got, want)
+		}
+	}
+	if got := dropDatabaseSQL(`x"; DROP DATABASE prod`, true); got != `DROP DATABASE IF EXISTS "x""; DROP DATABASE prod" WITH (FORCE)` {
+		t.Errorf("identifier not quoted under FORCE: %s", got)
+	}
+}
