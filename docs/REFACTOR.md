@@ -56,6 +56,7 @@ local socket that does not exist in this image.
 | Privilege drop | `sudo -E -u nominatim` (setuid-root binary in the image) | `SysProcAttr.Credential` — a direct fork+setuid, no setuid binary anywhere |
 | Database access | 9 `psql -c "…${VAR}…"` string interpolations | `pgx` with bind parameters; quoted identifiers and literals where PostgreSQL forbids parameters |
 | Setting role passwords | `ALTER USER … PASSWORD '<cleartext>'`, logged verbatim by the server | Client-computed SCRAM-SHA-256 verifier; the password never leaves the entrypoint |
+| Log redaction | n/a (`set -x` echoed passwords) | Applied to the entrypoint's own output *and* to every child's, line by line |
 | Supplementary data | `sshpass -p <password> scp -o StrictHostKeyChecking=no` | HTTPS against the system CA bundle, optional SHA-256 |
 | API supervision | `--daemon` + PID-file polling + unconditional `exit 0` | Foreground child, `cmd.Wait()`, real exit code propagated |
 | Shutdown | Trap deferred behind `sleep 5`; kill then immediate exit | Signal wakes the select immediately; SIGTERM, drain, escalate to SIGKILL at 35 s |
@@ -86,7 +87,7 @@ Both images built on the same host from the same base digest:
 
 | | `master` | this branch |
 | --- | --- | --- |
-| Image size | 1.1 GB | 739 MB |
+| Image size | 1.1 GB | 734 MB |
 | setuid/setgid binaries | 14 | 0 |
 | Shutdown latency (`docker stop`) | up to 5 s | ~1 s |
 | Python dependencies pinned | 1 of 6 | 24 of 24, with hashes |
@@ -128,6 +129,17 @@ and in particular not the internet-facing one, is a superuser. The cost is that
 `PROVISION_EXTENSIONS=true` mutates `template1` cluster-wide, so every database
 later created on that server inherits PostGIS; set `PROVISION_EXTENSIONS=false`
 on a shared cluster and install the extensions yourself.
+
+**A note on password normalisation.** Three implementations prepare a password
+before hashing it, and they do not agree: PostgreSQL uses RFC 4013 SASLprep
+(NFKC, ignorable code points removed), pgx uses `precis.OpaqueString` (NFC,
+ignorables rejected), and the verifier written here uses RFC 4013 to match the
+server. A password containing, say, a soft hyphen therefore hashes to three
+different keys. The entrypoint hands pgx an already-prepared password so its own
+pass is a no-op, while Nominatim keeps the raw password in its DSN and lets libpq
+prepare it. All three then agree. This mismatch predates the rewrite — a pgx
+connection would have failed against any non-ASCII password — it was simply never
+exercised. `test/integration.sh` now imports with one.
 
 **C3 — unauthenticated fetch of a SQL dump that is then executed.**
 `StrictHostKeyChecking=no` removed the only authentication of the storage host,
@@ -194,6 +206,10 @@ are pinned to commit SHAs and the workflow has a least-privilege
 | `GUNICORN_BIND` | `0.0.0.0:8080` | Bind address |
 | `GUNICORN_TIMEOUT`, `GUNICORN_GRACEFUL_TIMEOUT` | `60`, `30` | Request and drain deadlines |
 | `POSTGRES_ADMIN_USER` | `postgres` | Administrative role name |
+| `NOMINATIM_WEBUSER_PASSWORD` | falls back to `NOMINATIM_PASSWORD` | Separate password for the read-only API role |
+| `FIX_VOLUME_OWNERSHIP` | `false` | Recursively take ownership of the project directory, for migrating a volume from the old image |
+| `GUNICORN_MAX_REQUESTS`, `GUNICORN_WORKER_TMP_DIR`, `GUNICORN_LIMIT_REQUEST_FIELDS` | `10000`, `/dev/shm`, `100` | Override the new Gunicorn defaults |
+| `SHUTDOWN_GRACE` | `35s` | How long a child may take to exit after SIGTERM |
 | `NOMINATIM_WEBUSER` | `www-data` | Read-only role name |
 
 **Removed:** `STORAGE_USER`, `STORAGE_HOST`, `STORAGE_PASSWORD` — superseded by
@@ -229,6 +245,18 @@ are pinned to commit SHAs and the workflow has a least-privilege
 9. **The application role is no longer a superuser.** If your provider cannot
    install extensions into `template1`, set `PROVISION_EXTENSIONS=false` and
    install PostGIS yourself, or set `NOMINATIM_ROLE_OPTIONS=SUPERUSER`.
+10. **A non-integer replication interval is now a startup error.** The shell
+    version applied `REPLICATION_UPDATE_INTERVAL`/`RECHECK_INTERVAL` only when
+    they matched `^[0-9]+$` and silently ignored anything else, so a typo left
+    the default in place unnoticed.
+11. **Gunicorn defaults changed.** Added: `--max-requests 10000` with jitter
+    (worker recycling, which bounds memory growth on a long-running planet
+    instance), `--timeout 60`, `--graceful-timeout 30`, `--keep-alive 5` and
+    request-size limits. `--worker-tmp-dir` moved from `/tmp` to `/dev/shm`.
+    All are overridable — see `GUNICORN_*` in the table above.
+12. **`template1` is modified on first import** unless `PROVISION_EXTENSIONS=false`
+    or the role is a superuser. Only genuinely missing extensions are installed,
+    and the entrypoint logs when it does so.
 
 ### Migrating an existing deployment
 
@@ -289,31 +317,24 @@ bug, cgroup CPU parsing, secret redaction, and configuration validation.
 
 Deliberately not addressed, listed so they are not mistaken for oversights:
 
-- **A non-printable-ASCII password is still sent in cleartext.** SASLprep is the
-  identity only for printable ASCII, so for anything else the verifier is computed
-  server-side from a cleartext `ALTER ROLE`. The entrypoint warns when it takes
-  that path. Printable-ASCII passwords — which is what `contrib/.env.example`
-  generates — never leave this process.
-- **Child process output is not redacted.** Only what the entrypoint itself logs
-  passes through the filter; a Python traceback from Nominatim could still print a
-  DSN.
-- **`PROVISION_EXTENSIONS` defaults to `true`**, which mutates `template1`
-  cluster-wide on first import. Convenient for a dedicated server, wrong for a
-  shared one — set it to `false` there.
-- **`PyICU` is source-only on PyPI**, so the `linux/arm64` leg of the publish job
-  compiles a C++ extension under QEMU and is slow. `master` used Debian's prebuilt
-  `python3-icu`.
-- **A `/nominatim` volume written by the old image may contain root-owned files.**
-  `chownProjectFiles` is deliberately non-recursive so it cannot clobber operator
-  bind mounts, which means it also cannot repair those. Run
-  `chown -R 1000:1000` on the volume once if the container reports permission errors.
-- **Two further undeclared changes to defaults:** a non-integer
-  `REPLICATION_UPDATE_INTERVAL`/`RECHECK_INTERVAL` is now a startup error rather
-  than being ignored; and Gunicorn gains `--max-requests 10000` worker recycling
-  and a `/dev/shm` worker temp dir. All three are overridable
-  (`GUNICORN_MAX_REQUESTS`, `GUNICORN_WORKER_TMP_DIR`, `GUNICORN_LIMIT_REQUEST_FIELDS`).
-- **The CI matrix has not been executed against this branch** — only the local
-  suite. Eight of the sixteen scenarios exercise paths the local suite does not.
+- **`PROVISION_EXTENSIONS` defaults to `true`.** Nominatim's setup shells out to
+  `createdb`, which fails if the database already exists, so the extensions
+  cannot be installed into the target database beforehand — `template1` is the
+  only way to hand them to an unprivileged role. The blast radius is reduced as
+  far as it can be: nothing is touched when the extensions are already present,
+  the step is skipped entirely for a superuser role, and it is logged when it
+  does act. On a shared cluster, set it to `false`.
+- **The `publish` job rebuilds rather than promoting the tested image.** The test
+  matrix builds `linux/amd64` only while publish builds `amd64,arm64`, so the
+  bytes that ship are not the bytes that passed. Provenance and SBOM attestation
+  are emitted; closing the gap needs a digest-based promotion step.
+- **No image vulnerability scanning in CI.** No Trivy or Grype gate, and no
+  scheduled rebuild, so a CVE in a floating apt package surfaces only on the next
+  push.
+- **APT packages float.** The base image is digest-pinned and Python is
+  hash-pinned, but apt is not, so two builds of the same commit can differ.
+  Pinning every apt version would freeze the image on known-vulnerable packages
+  instead; a scheduled rebuild plus a scanner is the better trade.
 
 ## Not changed
 

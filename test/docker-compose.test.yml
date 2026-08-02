@@ -36,7 +36,7 @@ services:
       POSTGRES_DB: nominatim
       POSTGRES_SSLMODE: disable
       POSTGRES_ADMIN_PASSWORD: itest-admin-password
-      NOMINATIM_PASSWORD: itest-nominatim-password
+      NOMINATIM_PASSWORD: ${ITEST_PASSWORD:-itest-nominatim-password}
       IMPORT_STYLE: ${IMPORT_STYLE:-full}
       REVERSE_ONLY: ${REVERSE_ONLY:-false}
       WARMUP_ON_STARTUP: ${WARMUP_ON_STARTUP:-false}

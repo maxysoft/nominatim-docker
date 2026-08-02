@@ -1,3 +1,7 @@
+# Direct Python dependencies. PyICU is deliberately absent: it ships no wheel,
+# so pip would compile a C++ extension — under QEMU on the arm64 publish leg.
+# Debian's prebuilt python3-icu is used instead, reached via a
+# --system-site-packages venv, which is what the pre-refactor image did.
 # Direct Python dependencies. requirements.txt is generated from this file with
 # fully pinned versions and hashes; regenerate with `make requirements`.
 nominatim-db==5.3.2
@@ -6,4 +10,3 @@ osmium
 psycopg[binary]
 falcon
 gunicorn
-PyICU

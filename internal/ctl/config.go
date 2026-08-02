@@ -85,6 +85,10 @@ type Config struct {
 	GunicornWorkers int
 	WarmupOnStartup bool
 
+	// FixVolumeOwnership recursively takes ownership of the project directory,
+	// for migrating a volume written by the pre-refactor image.
+	FixVolumeOwnership bool
+
 	// Derived paths.
 	FlatnodeFile string
 }
@@ -123,6 +127,7 @@ func Load() (*Config, error) {
 		UpdateMode:                 os.Getenv("UPDATE_MODE"),
 		GunicornBind:               envOr("GUNICORN_BIND", "0.0.0.0:8080"),
 		WarmupOnStartup:            envBool("WARMUP_ON_STARTUP"),
+		FixVolumeOwnership:         envBool("FIX_VOLUME_OWNERSHIP"),
 	}
 
 	for _, d := range Datasets {
@@ -297,12 +302,20 @@ func (c *Config) DSN(user, password string) string {
 
 // LibpqURL builds a URL the pgx driver understands. database may be empty to
 // connect to the maintenance database.
+//
+// The password is SASLprep'd here because three implementations disagree on how
+// to normalise it: PostgreSQL uses RFC 4013 SASLprep (NFKC, ignorables removed),
+// pgx uses precis.OpaqueString (NFC, ignorables rejected), and the verifier this
+// package stores uses RFC 4013. Handing pgx an already-prepared password makes
+// its own pass a no-op, so all three agree. Nominatim keeps the raw password in
+// its DSN — libpq applies RFC 4013 itself.
 func (c *Config) LibpqURL(user, password, database string) string {
 	if database == "" {
 		database = "postgres"
 	}
 	return fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=%s&application_name=nominatim-ctl",
-		urlEscape(user), urlEscape(password), c.PostgresHost, c.PostgresPort, urlEscape(database), c.PostgresSSLMode)
+		urlEscape(user), urlEscape(saslprep(password)), c.PostgresHost, c.PostgresPort,
+		urlEscape(database), c.PostgresSSLMode)
 }
 
 func envOr(name, def string) string {

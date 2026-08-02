@@ -42,13 +42,14 @@ build: ## Build the container image
 
 requirements: ## Regenerate requirements.txt with pinned versions and hashes
 	# Resolved on the same base the image builds on, so the pins match reality.
-	# PyICU is source-only, hence the build dependencies.
+	# pyicu is excluded: it has no wheel and is supplied by Debian's python3-icu.
 	docker run --rm -v $(PWD):/src -w /src -e DEBIAN_FRONTEND=noninteractive $(BASE_IMAGE) sh -c '\
 		apt-get -qq update && \
 		apt-get -qq install -y --no-install-recommends \
-			python3 python3-pip python3-venv build-essential libicu-dev pkg-config ca-certificates >/dev/null && \
+			python3 python3-pip ca-certificates >/dev/null && \
 		pip install --quiet --break-system-packages uv && \
-		uv pip compile --generate-hashes --no-header --output-file requirements.txt requirements.in && \
+		uv pip compile --generate-hashes --no-header --no-emit-package pyicu \
+			--output-file requirements.txt requirements.in && \
 		chown $(UID):$(GID) requirements.txt'
 
 integration: ## Full local integration test (builds the image, imports Monaco)

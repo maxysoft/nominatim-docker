@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -140,7 +141,9 @@ func provisionDatabase(ctx context.Context, c *Config) error {
 		return err
 	}
 
-	if c.ProvisionExtensions {
+	// A superuser role installs its own extensions during the import, so there
+	// is nothing to pre-seed and no reason to touch template1.
+	if c.ProvisionExtensions && !strings.Contains(strings.ToUpper(c.RoleOptions), "SUPERUSER") {
 		// Installed into template1 so the database the application role creates
 		// inherits them; Nominatim's own CREATE EXTENSION IF NOT EXISTS then
 		// short-circuits instead of demanding superuser.

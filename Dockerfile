@@ -34,6 +34,11 @@ RUN --mount=type=cache,target=/go/pkg/mod,sharing=locked \
 # Built into a virtualenv rather than installed over the system interpreter with
 # --break-system-packages, so pip never overwrites dpkg-owned files and the
 # whole runtime is one directory to copy.
+#
+# --system-site-packages so PyICU is taken from Debian's prebuilt python3-icu.
+# PyICU ships no wheel, so pip would compile a C++ extension — and on the arm64
+# publish leg that happens under QEMU. Every other dependency is a wheel, which
+# is why no compiler is installed here at all.
 # ---------------------------------------------------------------------------
 FROM ${BASE_IMAGE} AS py-build
 
@@ -46,16 +51,13 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     && echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' >/etc/apt/apt.conf.d/keep-cache \
     && apt-get -y update -qq \
     && apt-get -y install -o APT::Install-Recommends=false -o APT::Install-Suggests=false \
-        build-essential \
         ca-certificates \
-        libicu-dev \
-        pkg-config \
-        python3-dev \
+        python3-icu \
         python3-venv
 
 COPY requirements.txt /tmp/requirements.txt
 RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
-    python3 -m venv /opt/nominatim \
+    python3 -m venv --system-site-packages /opt/nominatim \
     && /opt/nominatim/bin/pip install --no-cache-dir --upgrade pip setuptools wheel \
     && /opt/nominatim/bin/pip install --no-cache-dir --require-hashes -r /tmp/requirements.txt \
     && find /opt/nominatim -name '__pycache__' -type d -prune -exec rm -rf {} +
@@ -97,10 +99,10 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     && apt-get -y update -qq \
     && apt-get -y install -o APT::Install-Recommends=false -o APT::Install-Suggests=false \
         ca-certificates \
-        libicu76 \
         osm2pgsql \
         postgresql-client \
         python3 \
+        python3-icu \
     && rm -f /usr/sbin/policy-rc.d \
     && rm -rf /var/lib/apt/lists/*
 

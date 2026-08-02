@@ -20,6 +20,18 @@ type Runner struct {
 	UID, GID int
 	Dir      string
 	Env      []string
+
+	// pending holds the output filters of commands this runner started, so a
+	// trailing partial line is not lost when the child exits.
+	pending []*RedactWriter
+}
+
+// FlushOutput writes any buffered partial lines from finished children.
+func (r *Runner) FlushOutput() {
+	for _, w := range r.pending {
+		w.Flush()
+	}
+	r.pending = nil
 }
 
 // Command builds a child process that will run as r.UID/r.GID.
@@ -27,8 +39,11 @@ func (r *Runner) Command(ctx context.Context, name string, args ...string) *exec
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = r.Dir
 	cmd.Env = r.Env
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	// Child output is filtered too: a Nominatim traceback or an osm2pgsql error
+	// can otherwise echo a DSN straight into the container log.
+	outw, errw := &RedactWriter{W: os.Stdout}, &RedactWriter{W: os.Stderr}
+	cmd.Stdout, cmd.Stderr = outw, errw
+	r.pending = append(r.pending, outw, errw)
 	// Cancelling the context asks the child to stop rather than killing it, so
 	// Gunicorn drains and a long import is not truncated mid-transaction.
 	// WaitDelay escalates to SIGKILL if it ignores that.
@@ -51,7 +66,9 @@ func (r *Runner) Command(ctx context.Context, name string, args ...string) *exec
 func (r *Runner) Run(ctx context.Context, name string, args ...string) error {
 	Logf("+ %s %v", name, args)
 	cmd := r.Command(ctx, name, args...)
-	if err := cmd.Run(); err != nil {
+	err := cmd.Run()
+	r.FlushOutput()
+	if err != nil {
 		return fmt.Errorf("%s %v: %w", name, args, err)
 	}
 	return nil

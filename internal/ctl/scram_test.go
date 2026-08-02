@@ -33,31 +33,30 @@ func TestScramVerifierIsDeterministicForAGivenSalt(t *testing.T) {
 	}
 }
 
-// The whole point: the cleartext password must not appear in the statement.
+// The whole point: the cleartext password must not appear in the statement,
+// for any password — not only printable ASCII.
 func TestPasswordSecretHidesTheCleartext(t *testing.T) {
-	const pw = "s3cret-password"
-	sql, hashed, err := passwordSecret(pw)
-	if err != nil {
-		t.Fatalf("passwordSecret: %v", err)
-	}
-	if !hashed {
-		t.Fatal("a printable-ASCII password should be sent as a verifier")
-	}
-	if strings.Contains(sql, pw) {
-		t.Fatalf("cleartext password present in the statement: %s", sql)
-	}
-	if !strings.HasPrefix(sql, "'SCRAM-SHA-256$4096:") {
-		t.Fatalf("unexpected verifier shape: %s", sql)
+	for _, pw := range []string{"s3cret-password", "pässwort", "naïve", "emoji🙂", "with space"} {
+		sql, err := passwordSecret(pw)
+		if err != nil {
+			t.Fatalf("passwordSecret(%q): %v", pw, err)
+		}
+		if strings.Contains(sql, pw) {
+			t.Errorf("cleartext password %q present in the statement: %s", pw, sql)
+		}
+		if !strings.HasPrefix(sql, "'SCRAM-SHA-256$4096:") {
+			t.Errorf("unexpected verifier shape for %q: %s", pw, sql)
+		}
 	}
 }
 
 // A fresh salt per call means two invocations differ even for one password.
 func TestPasswordSecretSaltsEachCall(t *testing.T) {
-	a, _, err := passwordSecret("pw")
+	a, err := passwordSecret("pw")
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, _, err := passwordSecret("pw")
+	b, err := passwordSecret("pw")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,37 +65,70 @@ func TestPasswordSecretSaltsEachCall(t *testing.T) {
 	}
 }
 
-// SASLprep is the identity only for printable ASCII. Anything else is sent as
-// cleartext so the server can normalise it, rather than silently producing a
-// verifier that will not authenticate.
-func TestPasswordSecretFallsBackForNonASCII(t *testing.T) {
-	for _, pw := range []string{"pässwort", "pass\tword", "naïve", "emoji🙂"} {
-		sql, hashed, err := passwordSecret(pw)
-		if err != nil {
-			t.Fatalf("passwordSecret(%q): %v", pw, err)
-		}
-		if hashed {
-			t.Errorf("password %q should not be pre-hashed", pw)
-		}
-		if !strings.Contains(sql, pw) {
-			t.Errorf("fallback for %q did not send the cleartext: %s", pw, sql)
+// RFC 4013 worked examples. PostgreSQL applies the same transformation before
+// hashing, so a mismatch here means the verifier will not authenticate.
+func TestSASLprepMatchesRFC4013Examples(t *testing.T) {
+	cases := map[string]string{
+		"I\u00ADX": "IX",     // SOFT HYPHEN is mapped to nothing
+		"user":     "user",   // unchanged
+		"USER":     "USER",   // no case folding
+		"\u00AA":   "a",      // FEMININE ORDINAL INDICATOR normalises under NFKC
+		"\u2168":   "IX",     // ROMAN NUMERAL NINE normalises under NFKC
+		"a\u00A0b": "a b",    // NO-BREAK SPACE maps to a plain space
+		"simple":   "simple", // printable ASCII is the identity
+	}
+	for in, want := range cases {
+		if got := saslprep(in); got != want {
+			t.Errorf("saslprep(%q) = %q, want %q", in, got, want)
 		}
 	}
 }
 
-func TestIsPrintableASCII(t *testing.T) {
-	cases := map[string]bool{
-		"simple":       true,
-		"with space":   true,
-		"~!@#$%^&*()_": true,
-		"":             true,
-		"tab\there":    false,
-		"nl\nhere":     false,
-		"café":         false,
+// PostgreSQL falls back to the raw bytes when SASLprep rejects the input, and
+// so must we, or the verifier will not match the server's expectation.
+func TestSASLprepFallsBackOnProhibitedInput(t *testing.T) {
+	in := "bad\u0007control" // BEL is prohibited by RFC 4013
+	if got := saslprep(in); got != in {
+		t.Fatalf("saslprep(%q) = %q, want the input unchanged", in, got)
 	}
-	for in, want := range cases {
-		if got := isPrintableASCII(in); got != want {
-			t.Errorf("isPrintableASCII(%q) = %v, want %v", in, got, want)
+}
+
+// A non-ASCII password must produce a verifier over the *prepared* form.
+func TestVerifierUsesPreparedPassword(t *testing.T) {
+	salt := []byte("0123456789abcdef")
+	// These two differ only by a SOFT HYPHEN, which SASLprep removes, so both
+	// must yield the same verifier.
+	a := ScramVerifier(saslprep("I\u00ADX"), salt, scramIterations)
+	b := ScramVerifier(saslprep("IX"), salt, scramIterations)
+	if a != b {
+		t.Fatal("SASLprep was not applied before hashing")
+	}
+}
+
+// PostgreSQL (RFC 4013), pgx (precis.OpaqueString) and this package must all
+// derive the same key. Handing pgx a pre-prepared password is what makes that
+// true; the property it relies on is that SASLprep output is a fixed point.
+func TestSASLprepIsIdempotent(t *testing.T) {
+	for _, pw := range []string{
+		"simple", "pässwort", "I­X", "a b", "Ωhm", "emoji🙂", "with space",
+	} {
+		once := saslprep(pw)
+		if twice := saslprep(once); twice != once {
+			t.Errorf("saslprep is not idempotent for %q: %q -> %q", pw, once, twice)
 		}
+	}
+}
+
+// The connection URL must carry the prepared form, or pgx and the server derive
+// different keys for a non-ASCII password.
+func TestLibpqURLCarriesPreparedPassword(t *testing.T) {
+	withEnv(t, baseEnv())
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	// SOFT HYPHEN is removed by SASLprep, so both must yield the same URL.
+	if a, b := c.LibpqURL("u", "I­X", "db"), c.LibpqURL("u", "IX", "db"); a != b {
+		t.Fatalf("URL not built from the prepared password:\n%s\n%s", a, b)
 	}
 }

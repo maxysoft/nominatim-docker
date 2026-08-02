@@ -44,6 +44,33 @@ Full rationale, parity matrix and migration steps: [docs/REFACTOR.md](docs/REFAC
   failed `docker compose config`.
 - **Removed:** `STORAGE_USER`, `STORAGE_HOST`, `STORAGE_PASSWORD`.
 
+Follow-up hardening (closes the remaining documented gaps):
+
+- **Security:** Role passwords are set with a client-computed SCRAM-SHA-256 verifier instead of
+  `ALTER ROLE ... PASSWORD '<cleartext>'`, which the server records verbatim under
+  `log_statement=ddl|all`. RFC 4013 SASLprep is applied first, so this covers non-ASCII passwords
+  too, with a fallback to the raw bytes that mirrors the server.
+- **Security:** Child process output (Gunicorn, osm2pgsql, Python tracebacks) is now filtered through
+  the secret masker as well, line by line. Previously only the entrypoint's own logging was redacted,
+  so a traceback could still print a DSN.
+- **Changed:** `template1` is modified only when an extension is genuinely missing, is skipped
+  entirely for a superuser role, and is logged when it happens. Nominatim's `createdb` fails on an
+  existing database, so `template1` remains the only route for an unprivileged role.
+- **Changed:** PyICU comes from Debian's prebuilt `python3-icu` via a `--system-site-packages` venv
+  rather than being compiled from an sdist. It has no wheel, so the arm64 publish leg was compiling
+  a C++ extension under QEMU. Every other dependency is a wheel, so the build stage no longer
+  installs a compiler at all.
+- **Added:** A startup check that the unprivileged user can write the project directory, with the
+  exact remediation command. A volume from the pre-refactor image is root-owned, and the failure
+  previously surfaced much later as an opaque Nominatim error. `FIX_VOLUME_OWNERSHIP=true` repairs
+  it in place.
+- **Docs:** Three previously undeclared behaviour changes are now in Breaking changes — a
+  non-integer replication interval is a startup error, the new Gunicorn defaults, and the
+  `template1` modification.
+- **Test:** An integration scenario imports with a non-ASCII password containing a soft hyphen and a
+  no-break space, proving the SASLprep path against a real PostgreSQL, and asserts the cleartext
+  does not reach the container log.
+
 Fixes from an independent review of the refactor itself:
 
 - **Fixed:** `cap_drop: ALL` in the `contrib/` compose files omitted `CAP_KILL`, so the entrypoint

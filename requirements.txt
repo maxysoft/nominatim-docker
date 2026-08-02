@@ -526,12 +526,6 @@ psycopg-binary==3.3.4 \
     --hash=sha256:fa1cbc10768a796c96d3243656016bf4e337c81c71097270bb7b0ad6210d9765 \
     --hash=sha256:fbd1d4ed566895ad2d3bf4ddfd8bae90026930ddf29df3b9d91d32c8c47866a7
     # via psycopg
-pyicu==2.16.2 \
-    --hash=sha256:006d51e24b5ec76df6ec2130f3dde269c51db8b8cfebb7d45a427dde0d10aa52
-    # via
-    #   -r requirements.in
-    #   nominatim-api
-    #   nominatim-db
 python-dotenv==1.2.2 \
     --hash=sha256:1d8214789a24de455a8b8bd8ae6fe3c6b69a5e3d64aa8a8e5d68e694bbcb285a \
     --hash=sha256:2c371a91fbd7ba082c2c1dc1f8bf89ca22564a087c2c287cd9b662adde799cf3
@@ -687,3 +681,6 @@ urllib3==2.7.0 \
     --hash=sha256:231e0ec3b63ceb14667c67be60f2f2c40a518cb38b03af60abc813da26505f4c \
     --hash=sha256:9fb4c81ebbb1ce9531cce37674bbc6f1360472bc18ca9a553ede278ef7276897
     # via requests
+
+# The following packages were excluded from the output:
+# pyicu

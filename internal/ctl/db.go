@@ -71,13 +71,9 @@ func EnsureRole(ctx context.Context, conn *pgx.Conn, role, password string, extr
 	}
 
 	ident := QuoteIdentifier(role)
-	secret, hashed, err := passwordSecret(password)
+	secret, err := passwordSecret(password)
 	if err != nil {
 		return err
-	}
-	if !hashed {
-		Logf("WARNING: password for role %q is not printable ASCII; sending it to the server "+
-			"in cleartext, where log_statement=ddl|all would record it", role)
 	}
 
 	if !exists {
@@ -202,7 +198,33 @@ func ProvisionExtensions(ctx context.Context, url string) error {
 	// creates, in dependency order — it issues CREATE EXTENSION IF NOT EXISTS for
 	// each, which succeeds without privileges only if the extension is already
 	// present in the template the database was created from.
+	//
+	// Nominatim's setup runs `createdb`, which fails if the database already
+	// exists, so the extensions cannot simply be installed into the target
+	// database beforehand. template1 is the only way to hand them to an
+	// unprivileged role. Only genuinely missing extensions are installed, and
+	// doing so is logged, because this changes every database later created on
+	// the cluster.
+	var missing []string
 	for _, ext := range []string{"hstore", "postgis", "postgis_raster"} {
+		var present bool
+		if err := conn.QueryRow(ctx,
+			"SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname = $1)", ext).Scan(&present); err != nil {
+			return fmt.Errorf("checking extension %s: %w", ext, err)
+		}
+		if !present {
+			missing = append(missing, ext)
+		}
+	}
+	if len(missing) == 0 {
+		Debugf("template1 already provides the required extensions")
+		return nil
+	}
+
+	Logf("NOTE: installing %v into template1. Every database created on this "+
+		"server from now on will inherit them. Set PROVISION_EXTENSIONS=false to "+
+		"manage extensions yourself.", missing)
+	for _, ext := range missing {
 		if _, err := conn.Exec(ctx, "CREATE EXTENSION IF NOT EXISTS "+QuoteIdentifier(ext)); err != nil {
 			return fmt.Errorf("creating extension %s: %w", ext, err)
 		}

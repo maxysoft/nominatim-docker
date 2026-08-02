@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"fmt"
 
+	"github.com/xdg-go/stringprep"
 	"golang.org/x/crypto/pbkdf2"
 )
 
@@ -41,31 +42,25 @@ func hmacSHA256(key, msg []byte) []byte {
 	return m.Sum(nil)
 }
 
-// passwordSecret renders the value for a CREATE/ALTER ROLE ... PASSWORD clause.
+// saslprep normalises a password the way PostgreSQL does before hashing it.
 //
-// PostgreSQL applies SASLprep (RFC 4013) to a cleartext password before hashing
-// it. SASLprep is the identity mapping for printable ASCII, so a verifier
-// computed here matches the server's for those passwords. For anything else we
-// send the cleartext and let the server normalise it — a correct login matters
-// more than keeping it out of a log the operator may not even have enabled.
-func passwordSecret(password string) (sql string, hashed bool, err error) {
-	if !isPrintableASCII(password) {
-		return QuoteLiteral(password), false, nil
+// The server runs RFC 4013 SASLprep and, if that fails, falls back to the raw
+// bytes (see pg_saslprep). Mirroring both halves is what lets the verifier
+// computed here authenticate for any password, not just printable ASCII.
+func saslprep(password string) string {
+	prepped, err := stringprep.SASLprep.Prepare(password)
+	if err != nil {
+		return password
 	}
-	salt := make([]byte, 16)
-	if _, err := rand.Read(salt); err != nil {
-		return "", false, fmt.Errorf("generating SCRAM salt: %w", err)
-	}
-	return QuoteLiteral(ScramVerifier(password, salt, scramIterations)), true, nil
+	return prepped
 }
 
-// isPrintableASCII reports whether every byte is in the range SASLprep leaves
-// untouched (space through tilde).
-func isPrintableASCII(s string) bool {
-	for i := 0; i < len(s); i++ {
-		if s[i] < 0x20 || s[i] > 0x7e {
-			return false
-		}
+// passwordSecret renders the value for a CREATE/ALTER ROLE ... PASSWORD clause.
+// The cleartext never appears in it.
+func passwordSecret(password string) (sql string, err error) {
+	salt := make([]byte, 16)
+	if _, err := rand.Read(salt); err != nil {
+		return "", fmt.Errorf("generating SCRAM salt: %w", err)
 	}
-	return true
+	return QuoteLiteral(ScramVerifier(saslprep(password), salt, scramIterations)), nil
 }

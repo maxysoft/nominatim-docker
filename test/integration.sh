@@ -4,7 +4,8 @@
 # PostGIS container, and asserts the same behaviour the CI matrix checks.
 #
 # Usage: test/integration.sh [scenario ...]
-# Scenarios: full reverse-only restart shutdown security   (default: all)
+# Scenarios: full security restart volume_loss shutdown failfast
+#            unicode_password reverse_only admin_style
 
 set -euo pipefail
 
@@ -308,6 +309,29 @@ scenario_failfast() {
   fi
 }
 
+# A non-ASCII password only authenticates if our SASLprep matches the server's.
+# No unit test can establish that; it needs a real PostgreSQL.
+scenario_unicode_password() {
+  log "scenario: non-ASCII password (SASLprep)"
+  cleanup
+  # Contains a soft hyphen (mapped away), a no-break space (mapped to a space)
+  # and multi-byte characters.
+  ITEST_PASSWORD=$'pä\u00adss\u00a0wörd-Ω' $COMPOSE up -d
+  if wait_for_api 1200; then
+    ok "API authenticates with a non-ASCII password"
+    assert_json_nonempty "/search.php?q=avenue%20pasteur" "search works with a non-ASCII password"
+  else
+    bad "container never came up with a non-ASCII password"
+  fi
+
+  # And the cleartext must not be in the logs.
+  if $COMPOSE logs nominatim 2>&1 | grep -q 'wörd'; then
+    bad "cleartext password appeared in the container log"
+  else
+    ok "password absent from the container log"
+  fi
+}
+
 scenario_reverse_only() {
   log "scenario: REVERSE_ONLY"
   cleanup
@@ -331,7 +355,7 @@ scenario_admin_style() {
 main() {
   local scenarios=("$@")
   if [[ ${#scenarios[@]} -eq 0 ]]; then
-    scenarios=(full security restart volume_loss shutdown failfast)
+    scenarios=(full security restart volume_loss shutdown failfast unicode_password)
   fi
 
   build_image

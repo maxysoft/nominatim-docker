@@ -4,6 +4,7 @@ go 1.24
 
 require (
 	github.com/jackc/pgx/v5 v5.7.6
+	github.com/xdg-go/stringprep v1.0.4
 	golang.org/x/crypto v0.37.0
 )
 

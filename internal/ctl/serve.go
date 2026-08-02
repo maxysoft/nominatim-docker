@@ -65,6 +65,9 @@ func Serve(ctx context.Context, c *Config) error {
 	if err := PrepareProjectDir(c, uid, gid); err != nil {
 		return err
 	}
+	if err := EnsureVolumeOwnership(c, uid, gid); err != nil {
+		return err
+	}
 
 	if err := ensureImported(ctx, c, r); err != nil {
 		return err
