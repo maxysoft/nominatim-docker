@@ -33,7 +33,7 @@ Full rationale, parity matrix and migration steps: [docs/REFACTOR.md](docs/REFAC
 - **Security:** `DROP DATABASE` refuses to touch a populated database without `ALLOW_DROP_EXISTING_DB=true`.
 - **Security:** Pinned all Python dependencies with hashes (`gunicorn>=25.0` was resolving to 26.0.0)
   and all GitHub Actions to commit SHAs; added a least-privilege `permissions:` block to CI.
-- **Added:** `POSTGRES_SSLMODE`, `DATA_MIRROR_URL`, `ALLOW_DROP_EXISTING_DB`, `API_DB_USER`,
+- **Added:** `POSTGRES_SSLMODE`, `DATA_MIRROR_URL`, `ALLOW_DROP_EXISTING_DB`, `NOMINATIM_WEBUSER`,
   `GUNICORN_BIND`, `NOMINATIM_ROLE_OPTIONS`, `PROVISION_EXTENSIONS`, `*_SHA256` checksums, and
   `_FILE` variants for both passwords.
 - **Added:** A `HEALTHCHECK` hitting `/status.php`, implemented in the entrypoint so the image needs no curl.
@@ -112,6 +112,23 @@ Serve/import split and immutable root filesystem:
 - **Test:** A `serve_image` integration scenario builds the serve target, asserts osm2pgsql and psql
   are absent, asserts the fail-fast refusal against an empty database, and serves an existing import
   under `--read-only`.
+
+Repository cleanup from an over-engineering audit:
+
+- **Removed:** `example.md` — it duplicated howto.md's configuration table, documented an invalid
+  `UPDATE_MODE=none`, and its example ran the upstream `mediagis/nominatim` image.
+- **Removed:** The upstream contributors table and `.all-contributorsrc`; every entry pointed at
+  `mediagis/nominatim-docker`. The credit is now a link to the upstream list.
+- **Changed:** The 16 CI scenarios share one `start-postgres` helper instead of carrying 16 copies
+  of the PostgreSQL bootstrap (−291 lines in ci.yml).
+- **Docs:** Fixed stale claims left from before the refactor: `POSTGRES_ADMIN_PASSWORD` was
+  documented as defaulting to `NOMINATIM_PASSWORD` (it is required and never derived), the container
+  was said to expose PostgreSQL on 5432 (there is no PostgreSQL in this image), the project volume
+  was said to hold the import state (it lives in the database now), examples pinned a dead image
+  tag, and the never-implemented `API_DB_USER` variable is gone from the docs (`NOMINATIM_WEBUSER`
+  is the real one). The manual database setup in EXTERNAL-POSTGIS.md now includes the
+  `managed by nominatim-docker` role comments, without which the entrypoint refuses to reconcile
+  the roles it did not create.
 
 ### v5.3.2 — 2026-04-22
 

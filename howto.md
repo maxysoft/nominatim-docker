@@ -11,7 +11,6 @@
     - [General Parameters](#general-parameters)
     - [Import Style](#import-style)
     - [Flatnode files](#flatnode-files)
-    - [Configuration Example](#configuration-example)
   - [Persistent container data](#persistent-container-data)
   - [OpenStreetMap Data Extracts](#openstreetmap-data-extracts)
   - [Updating the database](#updating-the-database)
@@ -25,18 +24,22 @@
 
 ## Automatic import
 
-Download the required data, initialize the database and start nominatim in one go
+With an external PostgreSQL/PostGIS server reachable (see [EXTERNAL-POSTGIS.md](docs/EXTERNAL-POSTGIS.md)),
+download the required data, initialize the database and start nominatim in one go:
 
 ```sh
 docker run -it \
   -e PBF_URL=https://download.geofabrik.de/europe/monaco-latest.osm.pbf \
   -e REPLICATION_URL=https://download.geofabrik.de/europe/monaco-updates/ \
+  -e POSTGRES_HOST=your_postgres_host \
+  -e NOMINATIM_PASSWORD=very_secure_password \
+  -e POSTGRES_ADMIN_PASSWORD=your_postgres_password \
   -p 8080:8080 \
   --name nominatim \
-  ghcr.io/maxysoft/nominatim-docker:v5.2.0-cbe2ec7
+  ghcr.io/maxysoft/nominatim-docker:latest
 ```
 
-Port 8080 is the nominatim HTTP API port and 5432 is the Postgres port, which you may or may not want to expose.
+Port 8080 is the Nominatim HTTP API port. PostgreSQL runs on your external server, not in this container.
 
 If you want to check that your data import was successful, you can use the API with the following URL: <http://localhost:8080/search?q=avenue%20pasteur>
 
@@ -57,7 +60,7 @@ Other places at Geofabrik follow the pattern `https://download.geofabrik.de/$CON
 
 - `REPLICATION_UPDATE_INTERVAL`: How often upstream publishes diffs (in seconds, default: `86400`). _Requires `REPLICATION_URL` to be set._
 - `REPLICATION_RECHECK_INTERVAL`: How long to sleep if no update found yet (in seconds, default: `900`). _Requires `REPLICATION_URL` to be set._
-- `UPDATE_MODE`: How to run replication to [update nominatim data](https://nominatim.org/release-docs/5.3/admin/Update/#updating-nominatim). Options: `continuous`/`once`/`catch-up`/`none` (default: `none`)
+- `UPDATE_MODE`: How to run replication to [update nominatim data](https://nominatim.org/release-docs/5.3/admin/Update/#updating-nominatim). Options: `continuous`/`once`/`catch-up` (default: unset — no automatic updates)
 - `FREEZE`: Freeze database and disable dynamic updates to save space. (default: `false`)
 - `REVERSE_ONLY`: If you only want to use the Nominatim database for reverse lookups. (default: `false`)
 - `IMPORT_WIKIPEDIA`: Whether to download and import the Wikipedia importance dumps (`true`) or path to importance dump in the container. Importance dumps improve the scoring of results. On a beefy 10-core server, this takes around 5 minutes. (default: `false`)
@@ -65,8 +68,8 @@ Other places at Geofabrik follow the pattern `https://download.geofabrik.de/$CON
 - `IMPORT_US_POSTCODES`: Whether to download and import the US postcode dump (`true`) or path to US postcode dump in the container. (default: `false`)
 - `IMPORT_GB_POSTCODES`: Whether to download and import the GB postcode dump (`true`) or path to GB postcode dump in the container. (default: `false`)
 - `IMPORT_TIGER_ADDRESSES`: Whether to download and import the Tiger address data (`true`) or path to a preprocessed Tiger address set in the container. (default: `false`)
-- `THREADS`: How many threads should be used to import (default: number of processing units available to the current process via `nproc`)
-- `GUNICORN_WORKERS`: Specifies how many Gunicorn worker processes should handle API requests. If not explicitly set, it defaults to the number of available CPU cores `(nproc)`. Increase this value to improve concurrent request handling capacity, but ensure it aligns with your server's CPU resources.
+- `THREADS`: How many threads should be used to import (default: the container's CPU allowance — the cgroup CPU quota when one is set, otherwise all cores)
+- `GUNICORN_WORKERS`: Specifies how many Gunicorn worker processes should handle API requests. If not explicitly set, it defaults to the container's CPU allowance (same rule as `THREADS`). Increase this value to improve concurrent request handling capacity, but ensure it aligns with your server's CPU resources.
 - `NOMINATIM_PASSWORD`: Password for the `nominatim` and `www-data` database roles. **Required — there is no default.**
   Use `NOMINATIM_PASSWORD_FILE` to read it from a secret file instead. Must not contain `;`.
 - `POSTGRES_ADMIN_PASSWORD`: Password for the PostgreSQL superuser. **Required for the initial import**,
@@ -86,7 +89,7 @@ This version requires an external PostgreSQL database with PostGIS extension. Th
 - `POSTGRES_PORT` (default: `5432`): Port number of the PostgreSQL server
 - `POSTGRES_DB` (default: `nominatim`): Name of the database to use
 - `NOMINATIM_PASSWORD`: Password for the Nominatim database users
-- `POSTGRES_ADMIN_PASSWORD` (default: same as `NOMINATIM_PASSWORD`): Password for the PostgreSQL admin user
+- `POSTGRES_ADMIN_PASSWORD`: Password for the PostgreSQL superuser — required for the initial import, never derived from `NOMINATIM_PASSWORD`
 
 For PostgreSQL tuning, configure your external PostgreSQL server according to the [official Nominatim documentation](https://nominatim.org/release-docs/5.3/admin/Installation/#tuning-the-postgresql-database).
 
@@ -119,18 +122,14 @@ docker run -it \
   -e REPLICATION_URL=https://download.geofabrik.de/europe/monaco-updates/ \
   -p 8080:8080 \
   --name nominatim \
-  ghcr.io/maxysoft/nominatim-docker:v5.2.0-cbe2ec7
+  ghcr.io/maxysoft/nominatim-docker:latest
 ```
-
-### Configuration Example
-
-Here you can find a [configuration example](example.md) for all flags you can use for the container creation.
 
 ## Persistent container data
 
 When using external PostgreSQL (recommended), data persistence is handled by your external database server. For the Nominatim container, you only need to persist:
 
-- `/nominatim` is the storage location of the Nominatim project data and holds the state about whether the import was successful
+- `/nominatim` holds the Nominatim project data (configuration, replication state, optional flatnode file). Import completion is recorded in the database itself, so losing this volume does not trigger a re-import.
 - `/nominatim/flatnode` is the storage location of the flatnode file (if used).
 
 So if you want to be able to kill your container and start it up again with all the data still present use the following command with external PostgreSQL:
@@ -146,7 +145,7 @@ docker run -it --shm-size=1g \
   -v nominatim-data:/nominatim \
   -p 8080:8080 \
   --name nominatim \
-  ghcr.io/maxysoft/nominatim-docker:v5.2.0-cbe2ec7
+  ghcr.io/maxysoft/nominatim-docker:latest
 ```
 
 ## OpenStreetMap Data Extracts
@@ -169,7 +168,7 @@ docker run -it \
   -p 8080:8080 \
   -v /osm-maps/data:/nominatim/data \
   --name nominatim \
-  ghcr.io/maxysoft/nominatim-docker:v5.2.0-cbe2ec7
+  ghcr.io/maxysoft/nominatim-docker:latest
 ```
 
 where the _/osm-maps/data/_ directory contains _monaco-latest.osm.pbf_ file that is mounted and available in container: _/nominatim/data/monaco-latest.osm.pbf_
@@ -200,7 +199,7 @@ docker run -it \
   -p 8080:8080 \
   -v /osm-maps/data:/nominatim/data \
   --name nominatim \
-  ghcr.io/maxysoft/nominatim-docker:v5.2.0-cbe2ec7
+  ghcr.io/maxysoft/nominatim-docker:latest
 ```
 
 where the _/osm-maps/data/_ directory contains _merged.osm.pbf_ file that is mounted and available in container: _/nominatim/data/merged.osm.pbf_
@@ -216,7 +215,7 @@ docker run -it \
   -p 8080:8080 \
   -v /osm-maps/extras:/nominatim/extras \
   --name nominatim \
-  ghcr.io/maxysoft/nominatim-docker:v5.2.0-cbe2ec7
+  ghcr.io/maxysoft/nominatim-docker:latest
 ```
 
 Where the path to the importance dump is given relative to the container. (The file does not need to be named `wikimedia-importance.sql.gz`.) The same works for `IMPORT_US_POSTCODES` and `IMPORT_GB_POSTCODES`.

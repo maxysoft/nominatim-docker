@@ -216,7 +216,6 @@ are pinned to commit SHAs and the workflow has a least-privilege
 | `ALLOW_DROP_EXISTING_DB` | `false` | Permit overwriting a populated database |
 | `NOMINATIM_ROLE_OPTIONS` | `CREATEDB` | Role attributes; set to `SUPERUSER` to restore the old behaviour |
 | `PROVISION_EXTENSIONS` | `true` | Install PostGIS and hstore into `template1` |
-| `API_DB_USER` | `www-data` | Database role the API connects as |
 | `GUNICORN_BIND` | `0.0.0.0:8080` | Bind address |
 | `GUNICORN_TIMEOUT`, `GUNICORN_GRACEFUL_TIMEOUT` | `60`, `30` | Request and drain deadlines |
 | `NOMINATIM_WEBUSER_PASSWORD` | falls back to `NOMINATIM_PASSWORD` | Separate password for the read-only API role |

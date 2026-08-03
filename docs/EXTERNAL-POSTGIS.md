@@ -30,7 +30,7 @@ The following environment variables are used to configure the external database 
 - `POSTGRES_PORT`: Port number of the PostgreSQL server (default: `5432`)
 - `POSTGRES_DB`: Name of the database to use (default: `nominatim`)
 - `NOMINATIM_PASSWORD`: Password for the Nominatim database users
-- `POSTGRES_ADMIN_PASSWORD`: Password for the PostgreSQL admin user (default: same as `NOMINATIM_PASSWORD`)
+- `POSTGRES_ADMIN_PASSWORD`: Password for the PostgreSQL superuser — required for the initial import, never derived from `NOMINATIM_PASSWORD`
 
 ### Optional Variables
 All other Nominatim configuration variables remain the same as in the original documentation.
@@ -65,6 +65,12 @@ CREATE EXTENSION IF NOT EXISTS hstore;
 -- Set passwords (replace with your actual password)
 ALTER USER nominatim WITH ENCRYPTED PASSWORD 'your_password';
 ALTER USER "www-data" WITH ENCRYPTED PASSWORD 'your_password';
+
+-- Mark the roles as managed. Without this comment the container refuses to
+-- touch roles it did not create (so it can never hijack a pre-existing
+-- "www-data" on a shared cluster) and startup fails.
+COMMENT ON ROLE nominatim IS 'managed by nominatim-docker';
+COMMENT ON ROLE "www-data" IS 'managed by nominatim-docker';
 
 -- Create database
 CREATE DATABASE nominatim OWNER nominatim;
