@@ -90,26 +90,8 @@ jobs:
         test_scenario:
           - name: Import with PBF_URL and update
             commands: |-
-              # Start PostgreSQL with PostGIS
-              docker network create nominatim-net
-              docker run -d --rm --name postgres --network nominatim-net \
-                -e POSTGRES_PASSWORD=very_secure_password \
-                -e POSTGRES_USER=postgres \
-                -e POSTGRES_DB=nominatim \
-                postgis/postgis:18-3.6-alpine
-              
-              # Wait for PostgreSQL to be ready (matches docker-compose healthcheck)
-              for _ in $(seq 1 60); do
-                docker exec postgres pg_isready -U postgres >/dev/null 2>&1 && break
-                echo "Waiting for PostgreSQL..."
-                sleep 2
-              done
-              if ! docker exec postgres pg_isready -U postgres >/dev/null 2>&1; then
-                echo "PostgreSQL never became ready"
-                docker logs postgres 2>&1 | tail -30
-                exit 1
-              fi
-              echo "PostgreSQL is ready"
+              # Start PostgreSQL with PostGIS and wait until it accepts connections
+              ./start-postgres nominatim-net
               
               # get the data from four days ago to make sure there really are updates to apply
               four_days_ago=`date --date="4 days ago" +%y%m%d`
@@ -138,26 +120,8 @@ jobs:
           
           - name: Import with volume mount
             commands: |-
-              # Start PostgreSQL with PostGIS
-              docker network create nominatim-net2
-              docker run -d --rm --name postgres --network nominatim-net2 \
-                -e POSTGRES_PASSWORD=very_secure_password \
-                -e POSTGRES_USER=postgres \
-                -e POSTGRES_DB=nominatim \
-                postgis/postgis:18-3.6-alpine
-              
-              # Wait for PostgreSQL to be ready (matches docker-compose healthcheck)
-              for _ in $(seq 1 60); do
-                docker exec postgres pg_isready -U postgres >/dev/null 2>&1 && break
-                echo "Waiting for PostgreSQL..."
-                sleep 2
-              done
-              if ! docker exec postgres pg_isready -U postgres >/dev/null 2>&1; then
-                echo "PostgreSQL never became ready"
-                docker logs postgres 2>&1 | tail -30
-                exit 1
-              fi
-              echo "PostgreSQL is ready"
+              # Start PostgreSQL with PostGIS and wait until it accepts connections
+              ./start-postgres nominatim-net2
               
               docker run -i --rm --network nominatim-net2 \
                 --shm-size 1g \
@@ -182,27 +146,8 @@ jobs:
           
           - name: Import with persistent data and container restart
             commands: |-
-              # Start PostgreSQL with PostGIS with persistent volume
-              docker network create nominatim-net3
-              docker run -d --rm --name postgres --network nominatim-net3 \
-                -e POSTGRES_PASSWORD=very_secure_password \
-                -e POSTGRES_USER=postgres \
-                -e POSTGRES_DB=nominatim \
-                -v postgres-data:/var/lib/postgresql \
-                postgis/postgis:18-3.6-alpine
-              
-              # Wait for PostgreSQL to be ready (matches docker-compose healthcheck)
-              for _ in $(seq 1 60); do
-                docker exec postgres pg_isready -U postgres >/dev/null 2>&1 && break
-                echo "Waiting for PostgreSQL..."
-                sleep 2
-              done
-              if ! docker exec postgres pg_isready -U postgres >/dev/null 2>&1; then
-                echo "PostgreSQL never became ready"
-                docker logs postgres 2>&1 | tail -30
-                exit 1
-              fi
-              echo "PostgreSQL is ready"
+              # Start PostgreSQL with PostGIS and wait until it accepts connections
+              ./start-postgres nominatim-net3 postgres-data
               
               # get the data from four days ago to make sure there really are updates to apply
               four_days_ago=`date --date="4 days ago" +%y%m%d`
@@ -253,27 +198,8 @@ jobs:
 
           - name: UPDATE_MODE=once
             commands: |-
-              # Start PostgreSQL with PostGIS
-              docker network create nominatim-net-update1
-              docker run -d --rm --name postgres --network nominatim-net-update1 \
-                -e POSTGRES_PASSWORD=very_secure_password \
-                -e POSTGRES_USER=postgres \
-                -e POSTGRES_DB=nominatim \
-                -v postgres-data-update1:/var/lib/postgresql \
-                postgis/postgis:18-3.6-alpine
-              
-              # Wait for PostgreSQL to be ready (matches docker-compose healthcheck)
-              for _ in $(seq 1 60); do
-                docker exec postgres pg_isready -U postgres >/dev/null 2>&1 && break
-                echo "Waiting for PostgreSQL..."
-                sleep 2
-              done
-              if ! docker exec postgres pg_isready -U postgres >/dev/null 2>&1; then
-                echo "PostgreSQL never became ready"
-                docker logs postgres 2>&1 | tail -30
-                exit 1
-              fi
-              echo "PostgreSQL is ready"
+              # Start PostgreSQL with PostGIS and wait until it accepts connections
+              ./start-postgres nominatim-net-update1 postgres-data-update1
               
               # get the data from four days ago to make sure there really are updates to apply
               four_days_ago=`date --date="4 days ago" +%y%m%d`
@@ -319,27 +245,8 @@ jobs:
 
           - name: UPDATE_MODE=continuous
             commands: |-
-              # Start PostgreSQL with PostGIS
-              docker network create nominatim-net-update2
-              docker run -d --rm --name postgres --network nominatim-net-update2 \
-                -e POSTGRES_PASSWORD=very_secure_password \
-                -e POSTGRES_USER=postgres \
-                -e POSTGRES_DB=nominatim \
-                -v postgres-data-update2:/var/lib/postgresql \
-                postgis/postgis:18-3.6-alpine
-              
-              # Wait for PostgreSQL to be ready (matches docker-compose healthcheck)
-              for _ in $(seq 1 60); do
-                docker exec postgres pg_isready -U postgres >/dev/null 2>&1 && break
-                echo "Waiting for PostgreSQL..."
-                sleep 2
-              done
-              if ! docker exec postgres pg_isready -U postgres >/dev/null 2>&1; then
-                echo "PostgreSQL never became ready"
-                docker logs postgres 2>&1 | tail -30
-                exit 1
-              fi
-              echo "PostgreSQL is ready"
+              # Start PostgreSQL with PostGIS and wait until it accepts connections
+              ./start-postgres nominatim-net-update2 postgres-data-update2
               
               # get the data from few days ago to make sure there really are updates to apply
               days_ago=`date --date="4 days ago" +%y%m%d`
@@ -385,26 +292,8 @@ jobs:
 
           - name: Import full style
             commands: |-
-              # Start PostgreSQL with PostGIS
-              docker network create nominatim-net4
-              docker run -d --rm --name postgres --network nominatim-net4 \
-                -e POSTGRES_PASSWORD=very_secure_password \
-                -e POSTGRES_USER=postgres \
-                -e POSTGRES_DB=nominatim \
-                postgis/postgis:18-3.6-alpine
-              
-              # Wait for PostgreSQL to be ready (matches docker-compose healthcheck)
-              for _ in $(seq 1 60); do
-                docker exec postgres pg_isready -U postgres >/dev/null 2>&1 && break
-                echo "Waiting for PostgreSQL..."
-                sleep 2
-              done
-              if ! docker exec postgres pg_isready -U postgres >/dev/null 2>&1; then
-                echo "PostgreSQL never became ready"
-                docker logs postgres 2>&1 | tail -30
-                exit 1
-              fi
-              echo "PostgreSQL is ready"
+              # Start PostgreSQL with PostGIS and wait until it accepts connections
+              ./start-postgres nominatim-net4
               
               docker run -i --rm --network nominatim-net4 \
                 --shm-size 1g \
@@ -430,26 +319,8 @@ jobs:
           
           - name: Import admin style
             commands: |-
-              # Start PostgreSQL with PostGIS
-              docker network create nominatim-net5
-              docker run -d --rm --name postgres --network nominatim-net5 \
-                -e POSTGRES_PASSWORD=very_secure_password \
-                -e POSTGRES_USER=postgres \
-                -e POSTGRES_DB=nominatim \
-                postgis/postgis:18-3.6-alpine
-              
-              # Wait for PostgreSQL to be ready (matches docker-compose healthcheck)
-              for _ in $(seq 1 60); do
-                docker exec postgres pg_isready -U postgres >/dev/null 2>&1 && break
-                echo "Waiting for PostgreSQL..."
-                sleep 2
-              done
-              if ! docker exec postgres pg_isready -U postgres >/dev/null 2>&1; then
-                echo "PostgreSQL never became ready"
-                docker logs postgres 2>&1 | tail -30
-                exit 1
-              fi
-              echo "PostgreSQL is ready"
+              # Start PostgreSQL with PostGIS and wait until it accepts connections
+              ./start-postgres nominatim-net5
               
               docker run -i --rm --network nominatim-net5 \
                 --shm-size 1g \
@@ -475,26 +346,8 @@ jobs:
 
           - name: Import with PBF_PATH
             commands: |-
-              # Start PostgreSQL with PostGIS
-              docker network create nominatim-net6
-              docker run -d --rm --name postgres --network nominatim-net6 \
-                -e POSTGRES_PASSWORD=very_secure_password \
-                -e POSTGRES_USER=postgres \
-                -e POSTGRES_DB=nominatim \
-                postgis/postgis:18-3.6-alpine
-              
-              # Wait for PostgreSQL to be ready (matches docker-compose healthcheck)
-              for _ in $(seq 1 60); do
-                docker exec postgres pg_isready -U postgres >/dev/null 2>&1 && break
-                echo "Waiting for PostgreSQL..."
-                sleep 2
-              done
-              if ! docker exec postgres pg_isready -U postgres >/dev/null 2>&1; then
-                echo "PostgreSQL never became ready"
-                docker logs postgres 2>&1 | tail -30
-                exit 1
-              fi
-              echo "PostgreSQL is ready"
+              # Start PostgreSQL with PostGIS and wait until it accepts connections
+              ./start-postgres nominatim-net6
               
               wget --cut-dirs=1 -nH -xP /tmp/data https://download.geofabrik.de/europe/monaco-latest.osm.pbf
               docker run -i --rm --network nominatim-net6 \
@@ -521,26 +374,8 @@ jobs:
 
           - name: REPLICATION_URL is blank
             commands: |-
-              # Start PostgreSQL with PostGIS
-              docker network create nominatim-net7
-              docker run -d --rm --name postgres --network nominatim-net7 \
-                -e POSTGRES_PASSWORD=very_secure_password \
-                -e POSTGRES_USER=postgres \
-                -e POSTGRES_DB=nominatim \
-                postgis/postgis:18-3.6-alpine
-              
-              # Wait for PostgreSQL to be ready (matches docker-compose healthcheck)
-              for _ in $(seq 1 60); do
-                docker exec postgres pg_isready -U postgres >/dev/null 2>&1 && break
-                echo "Waiting for PostgreSQL..."
-                sleep 2
-              done
-              if ! docker exec postgres pg_isready -U postgres >/dev/null 2>&1; then
-                echo "PostgreSQL never became ready"
-                docker logs postgres 2>&1 | tail -30
-                exit 1
-              fi
-              echo "PostgreSQL is ready"
+              # Start PostgreSQL with PostGIS and wait until it accepts connections
+              ./start-postgres nominatim-net7
               
               docker run -i --rm --network nominatim-net7 \
                 --shm-size 1g \
@@ -564,26 +399,8 @@ jobs:
 
           - name: FREEZE
             commands: |-
-              # Start PostgreSQL with PostGIS
-              docker network create nominatim-net8
-              docker run -d --rm --name postgres --network nominatim-net8 \
-                -e POSTGRES_PASSWORD=very_secure_password \
-                -e POSTGRES_USER=postgres \
-                -e POSTGRES_DB=nominatim \
-                postgis/postgis:18-3.6-alpine
-              
-              # Wait for PostgreSQL to be ready (matches docker-compose healthcheck)
-              for _ in $(seq 1 60); do
-                docker exec postgres pg_isready -U postgres >/dev/null 2>&1 && break
-                echo "Waiting for PostgreSQL..."
-                sleep 2
-              done
-              if ! docker exec postgres pg_isready -U postgres >/dev/null 2>&1; then
-                echo "PostgreSQL never became ready"
-                docker logs postgres 2>&1 | tail -30
-                exit 1
-              fi
-              echo "PostgreSQL is ready"
+              # Start PostgreSQL with PostGIS and wait until it accepts connections
+              ./start-postgres nominatim-net8
               
               docker run -i --rm --network nominatim-net8 \
                 --shm-size 1g \
@@ -608,26 +425,8 @@ jobs:
 
           - name: GB postcode import
             commands: |-
-              # Start PostgreSQL with PostGIS
-              docker network create nominatim-net9
-              docker run -d --rm --name postgres --network nominatim-net9 \
-                -e POSTGRES_PASSWORD=very_secure_password \
-                -e POSTGRES_USER=postgres \
-                -e POSTGRES_DB=nominatim \
-                postgis/postgis:18-3.6-alpine
-              
-              # Wait for PostgreSQL to be ready (matches docker-compose healthcheck)
-              for _ in $(seq 1 60); do
-                docker exec postgres pg_isready -U postgres >/dev/null 2>&1 && break
-                echo "Waiting for PostgreSQL..."
-                sleep 2
-              done
-              if ! docker exec postgres pg_isready -U postgres >/dev/null 2>&1; then
-                echo "PostgreSQL never became ready"
-                docker logs postgres 2>&1 | tail -30
-                exit 1
-              fi
-              echo "PostgreSQL is ready"
+              # Start PostgreSQL with PostGIS and wait until it accepts connections
+              ./start-postgres nominatim-net9
               
               docker run -i --rm --network nominatim-net9 \
                 --shm-size 1g \
@@ -656,26 +455,8 @@ jobs:
   
           - name: REVERSE_ONLY
             commands: |-
-              # Start PostgreSQL with PostGIS
-              docker network create nominatim-net10
-              docker run -d --rm --name postgres --network nominatim-net10 \
-                -e POSTGRES_PASSWORD=very_secure_password \
-                -e POSTGRES_USER=postgres \
-                -e POSTGRES_DB=nominatim \
-                postgis/postgis:18-3.6-alpine
-              
-              # Wait for PostgreSQL to be ready (matches docker-compose healthcheck)
-              for _ in $(seq 1 60); do
-                docker exec postgres pg_isready -U postgres >/dev/null 2>&1 && break
-                echo "Waiting for PostgreSQL..."
-                sleep 2
-              done
-              if ! docker exec postgres pg_isready -U postgres >/dev/null 2>&1; then
-                echo "PostgreSQL never became ready"
-                docker logs postgres 2>&1 | tail -30
-                exit 1
-              fi
-              echo "PostgreSQL is ready"
+              # Start PostgreSQL with PostGIS and wait until it accepts connections
+              ./start-postgres nominatim-net10
               
               docker run -i --rm --network nominatim-net10 \
                 --shm-size 1g \
@@ -700,26 +481,8 @@ jobs:
           
           - name: Check for clean shutdown
             commands: |-
-              # Start PostgreSQL with PostGIS
-              docker network create nominatim-net11
-              docker run -d --rm --name postgres --network nominatim-net11 \
-                -e POSTGRES_PASSWORD=very_secure_password \
-                -e POSTGRES_USER=postgres \
-                -e POSTGRES_DB=nominatim \
-                postgis/postgis:18-3.6-alpine
-              
-              # Wait for PostgreSQL to be ready (matches docker-compose healthcheck)
-              for _ in $(seq 1 60); do
-                docker exec postgres pg_isready -U postgres >/dev/null 2>&1 && break
-                echo "Waiting for PostgreSQL..."
-                sleep 2
-              done
-              if ! docker exec postgres pg_isready -U postgres >/dev/null 2>&1; then
-                echo "PostgreSQL never became ready"
-                docker logs postgres 2>&1 | tail -30
-                exit 1
-              fi
-              echo "PostgreSQL is ready"
+              # Start PostgreSQL with PostGIS and wait until it accepts connections
+              ./start-postgres nominatim-net11
               
               docker run --detach --network nominatim-net11 \
                 --shm-size 1g \
@@ -749,26 +512,8 @@ jobs:
 
           - name: WARMUP_ON_STARTUP=true
             commands: |-
-              # Start PostgreSQL with PostGIS
-              docker network create nominatim-net12
-              docker run -d --rm --name postgres --network nominatim-net12 \
-                -e POSTGRES_PASSWORD=very_secure_password \
-                -e POSTGRES_USER=postgres \
-                -e POSTGRES_DB=nominatim \
-                postgis/postgis:18-3.6-alpine
-              
-              # Wait for PostgreSQL to be ready (matches docker-compose healthcheck)
-              for _ in $(seq 1 60); do
-                docker exec postgres pg_isready -U postgres >/dev/null 2>&1 && break
-                echo "Waiting for PostgreSQL..."
-                sleep 2
-              done
-              if ! docker exec postgres pg_isready -U postgres >/dev/null 2>&1; then
-                echo "PostgreSQL never became ready"
-                docker logs postgres 2>&1 | tail -30
-                exit 1
-              fi
-              echo "PostgreSQL is ready"
+              # Start PostgreSQL with PostGIS and wait until it accepts connections
+              ./start-postgres nominatim-net12
               
               docker run -i --rm --network nominatim-net12 \
                 --shm-size 1g \
@@ -794,26 +539,8 @@ jobs:
 
           - name: WARMUP_ON_STARTUP=false
             commands: |-
-              # Start PostgreSQL with PostGIS
-              docker network create nominatim-net13
-              docker run -d --rm --name postgres --network nominatim-net13 \
-                -e POSTGRES_PASSWORD=very_secure_password \
-                -e POSTGRES_USER=postgres \
-                -e POSTGRES_DB=nominatim \
-                postgis/postgis:18-3.6-alpine
-              
-              # Wait for PostgreSQL to be ready (matches docker-compose healthcheck)
-              for _ in $(seq 1 60); do
-                docker exec postgres pg_isready -U postgres >/dev/null 2>&1 && break
-                echo "Waiting for PostgreSQL..."
-                sleep 2
-              done
-              if ! docker exec postgres pg_isready -U postgres >/dev/null 2>&1; then
-                echo "PostgreSQL never became ready"
-                docker logs postgres 2>&1 | tail -30
-                exit 1
-              fi
-              echo "PostgreSQL is ready"
+              # Start PostgreSQL with PostGIS and wait until it accepts connections
+              ./start-postgres nominatim-net13
               
               docker run -i --rm --network nominatim-net13 \
                 --shm-size 1g \
@@ -839,26 +566,8 @@ jobs:
 
           - name: API endpoints coverage
             commands: |-
-              # Start PostgreSQL with PostGIS (same image as docker-compose.yml)
-              docker network create nominatim-net14
-              docker run -d --rm --name postgres --network nominatim-net14 \
-                -e POSTGRES_PASSWORD=very_secure_password \
-                -e POSTGRES_USER=postgres \
-                -e POSTGRES_DB=nominatim \
-                postgis/postgis:18-3.6-alpine
-              
-              # Wait for PostgreSQL to be ready (matches docker-compose healthcheck)
-              for _ in $(seq 1 60); do
-                docker exec postgres pg_isready -U postgres >/dev/null 2>&1 && break
-                echo "Waiting for PostgreSQL..."
-                sleep 2
-              done
-              if ! docker exec postgres pg_isready -U postgres >/dev/null 2>&1; then
-                echo "PostgreSQL never became ready"
-                docker logs postgres 2>&1 | tail -30
-                exit 1
-              fi
-              echo "PostgreSQL is ready"
+              # Start PostgreSQL with PostGIS and wait until it accepts connections
+              ./start-postgres nominatim-net14
               
               docker run -i --rm --network nominatim-net14 \
                 --shm-size 1g \

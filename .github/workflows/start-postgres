@@ -1,0 +1,37 @@
+#!/bin/sh
+# Starts the PostGIS container for a CI scenario and waits until it accepts
+# connections. Replaces 14 identical copies of this bootstrap in ci.yml.
+#
+# Usage: start-postgres NETWORK [VOLUME]
+set -eu
+
+net="$1"
+vol="${2:-}"
+
+docker network create "$net"
+
+set --
+if [ -n "$vol" ]; then
+  set -- -v "$vol:/var/lib/postgresql"
+fi
+
+docker run -d --rm --name postgres --network "$net" \
+  -e POSTGRES_PASSWORD=very_secure_password \
+  -e POSTGRES_USER=postgres \
+  -e POSTGRES_DB=nominatim \
+  "$@" \
+  postgis/postgis:18-3.6-alpine
+
+# Matches the docker-compose healthcheck cadence.
+for _ in $(seq 1 60); do
+  if docker exec postgres pg_isready -U postgres >/dev/null 2>&1; then
+    echo "PostgreSQL is ready"
+    exit 0
+  fi
+  echo "Waiting for PostgreSQL..."
+  sleep 2
+done
+
+echo "PostgreSQL never became ready"
+docker logs postgres 2>&1 | tail -30
+exit 1
