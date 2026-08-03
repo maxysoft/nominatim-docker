@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // RunImport performs the one-time database provisioning and OSM import.
@@ -71,11 +73,18 @@ func RunImport(ctx context.Context, c *Config, r *Runner) error {
 	}
 
 	Logf("gathering planner statistics")
-	if err := Analyze(ctx, c.LibpqURL("nominatim", c.NominatimPassword, c.PostgresDB)); err != nil {
+	conn, err := pgx.Connect(ctx, c.LibpqURL("nominatim", c.NominatimPassword, c.PostgresDB))
+	if err != nil {
+		return err
+	}
+	_, err = conn.Exec(ctx, "ANALYZE")
+	conn.Close(ctx)
+	if err != nil {
 		return err
 	}
 
-	return cleanupDownloads(c)
+	cleanupDownloads(c)
+	return nil
 }
 
 // fetchDatasets resolves the five optional supplementary datasets.
@@ -112,16 +121,21 @@ func fetchDatasets(ctx context.Context, c *Config, dl *Downloader) error {
 func provisionDatabase(ctx context.Context, c *Config) error {
 	adminURL := c.LibpqURL(adminUser, c.AdminPassword, "postgres")
 	Logf("waiting for PostgreSQL at %s:%d", c.PostgresHost, c.PostgresPort)
-	if err := WaitForDatabase(ctx, adminURL, 150, 2*time.Second); err != nil {
+	if err := waitForDatabase(ctx, adminURL, 150, 2*time.Second); err != nil {
 		return err
 	}
 
-	hasData, err := HasNominatimData(ctx, c.LibpqURL(adminUser, c.AdminPassword, c.PostgresDB))
-	if err != nil {
-		return err
+	// Bounded: a server that accepts TCP but stalls the startup handshake would
+	// otherwise block here with no diagnostic.
+	probeCtx, cancelProbe := context.WithTimeout(ctx, 15*time.Second)
+	defer cancelProbe()
+	var hasData bool
+	if tc, err := pgx.Connect(probeCtx, c.LibpqURL(adminUser, c.AdminPassword, c.PostgresDB)); err == nil {
+		hasData = hasNominatimData(probeCtx, tc)
+		tc.Close(probeCtx)
 	}
 
-	conn, err := Connect(ctx, adminURL)
+	conn, err := pgx.Connect(ctx, adminURL)
 	if err != nil {
 		return err
 	}
@@ -130,14 +144,14 @@ func provisionDatabase(ctx context.Context, c *Config) error {
 	// CREATEDB is all the import needs beyond ownership of its own database.
 	// Installing PostGIS is the only step that genuinely required superuser, and
 	// it is done below with the administrative connection instead.
-	if err := EnsureRole(ctx, conn, "nominatim", c.NominatimPassword, c.RoleOptions); err != nil {
+	if err := ensureRole(ctx, conn, "nominatim", c.NominatimPassword, c.RoleOptions); err != nil {
 		return err
 	}
-	if err := EnsureRole(ctx, conn, c.WebUser, c.WebUserPassword, ""); err != nil {
+	if err := ensureRole(ctx, conn, c.WebUser, c.WebUserPassword, ""); err != nil {
 		return err
 	}
 
-	if err := DropDatabase(ctx, conn, c.PostgresDB, hasData, c.AllowDropExistingDB); err != nil {
+	if err := dropDatabase(ctx, conn, c.PostgresDB, hasData, c.AllowDropExistingDB); err != nil {
 		return err
 	}
 
@@ -147,7 +161,16 @@ func provisionDatabase(ctx context.Context, c *Config) error {
 		// Installed into template1 so the database the application role creates
 		// inherits them; Nominatim's own CREATE EXTENSION IF NOT EXISTS then
 		// short-circuits instead of demanding superuser.
-		if err := ProvisionExtensions(ctx, c.LibpqURL(adminUser, c.AdminPassword, "template1")); err != nil {
+		tmpl, err := pgx.Connect(ctx, c.LibpqURL(adminUser, c.AdminPassword, "template1"))
+		if err != nil {
+			return err
+		}
+		err = provisionExtensions(ctx, tmpl)
+		// Closed here, not deferred: Nominatim's import runs
+		// CREATE DATABASE ... TEMPLATE template1, which fails while a session
+		// is still attached to template1.
+		tmpl.Close(ctx)
+		if err != nil {
 			return fmt.Errorf("installing PostGIS into template1 (set PROVISION_EXTENSIONS=false if your "+
 				"provider manages extensions, or NOMINATIM_ROLE_OPTIONS=SUPERUSER to let the import do it): %w", err)
 		}
@@ -190,7 +213,7 @@ func warmCaches(ctx context.Context, c *Config, r *Runner) error {
 // cleanupDownloads removes exactly the files the import created. The previous
 // `rm -f ${PROJECT_DIR}/*sql.gz` also matched operator files that happened to
 // end in those characters.
-func cleanupDownloads(c *Config) error {
+func cleanupDownloads(c *Config) {
 	Logf("removing downloaded dumps in %s", c.ProjectDir)
 	for _, d := range Datasets {
 		_ = os.Remove(filepath.Join(c.ProjectDir, d.Local))
@@ -198,7 +221,6 @@ func cleanupDownloads(c *Config) error {
 	if c.PBFURL != "" {
 		_ = os.Remove(c.OSMFile())
 	}
-	return nil
 }
 
 // chownProjectFiles gives the unprivileged user ownership of the paths it has

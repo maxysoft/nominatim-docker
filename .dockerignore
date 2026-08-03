@@ -4,4 +4,3 @@ contrib
 docs
 test
 *.md
-!requirements.txt

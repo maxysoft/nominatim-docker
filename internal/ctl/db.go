@@ -27,18 +27,13 @@ const roleMarker = "managed by nominatim-docker"
 // would then be served as though it were finished.
 const importMarker = "nominatim-docker: import complete"
 
-// Connect opens a single connection.
-func Connect(ctx context.Context, url string) (*pgx.Conn, error) {
-	return pgx.Connect(ctx, url)
-}
-
-// WaitForDatabase polls until a connection succeeds or the attempt budget is
+// waitForDatabase polls until a connection succeeds or the attempt budget is
 // exhausted, then reports the real driver error.
 //
 // The shell version looped forever with stderr discarded, so a wrong password
 // was indistinguishable from a database that had not finished booting — and it
 // hammered the server with failed authentications indefinitely.
-func WaitForDatabase(ctx context.Context, url string, attempts int, delay time.Duration) error {
+func waitForDatabase(ctx context.Context, url string, attempts int, delay time.Duration) error {
 	var last error
 	for i := 0; i < attempts; i++ {
 		if i > 0 {
@@ -63,12 +58,12 @@ func WaitForDatabase(ctx context.Context, url string, attempts int, delay time.D
 	return fmt.Errorf("PostgreSQL not reachable after %d attempts: %w", attempts, last)
 }
 
-// EnsureRole creates role if it is absent, and reconciles its password.
+// ensureRole creates role if it is absent, and reconciles its password.
 //
 // A role that exists without our marker comment belongs to someone else: on a
 // shared cluster "www-data" is a common name. Resetting its password would lock
 // out that application, so we stop instead.
-func EnsureRole(ctx context.Context, conn *pgx.Conn, role, password string, extraOptions string) error {
+func ensureRole(ctx context.Context, conn *pgx.Conn, role, password string, extraOptions string) error {
 	if err := mustNotBeEmpty("role name", role); err != nil {
 		return err
 	}
@@ -123,36 +118,19 @@ func EnsureRole(ctx context.Context, conn *pgx.Conn, role, password string, extr
 	return nil
 }
 
-// HasNominatimData reports whether the target database already holds an
-// imported Nominatim schema.
-//
-// This is the authoritative import marker. The previous implementation keyed
-// off a file in the application volume while the data lived in the database
-// volume; the two have independent lifecycles, so removing or renaming the
-// application volume made the container drop a fully populated database.
-func HasNominatimData(ctx context.Context, url string) (bool, error) {
-	// A database that is absent, or that we cannot yet authenticate against,
-	// simply holds no data as far as this check is concerned. Connectivity is
-	// verified separately by WaitForDatabase, which reports the real error.
-	cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-
-	conn, err := pgx.Connect(cctx, url)
-	if err != nil {
-		return false, nil
-	}
-	defer conn.Close(ctx)
-
+// hasNominatimData reports whether the connected database holds imported tables.
+// placex alone is not a completion signal — see importMarker.
+func hasNominatimData(ctx context.Context, conn *pgx.Conn) bool {
 	var present bool
-	if err := conn.QueryRow(cctx, "SELECT to_regclass('public.placex') IS NOT NULL").Scan(&present); err != nil {
-		return false, nil
+	if err := conn.QueryRow(ctx, "SELECT to_regclass('public.placex') IS NOT NULL").Scan(&present); err != nil {
+		return false
 	}
-	return present, nil
+	return present
 }
 
-// DropDatabase removes dbname. It refuses to touch a database that already
+// dropDatabase removes dbname. It refuses to touch a database that already
 // contains Nominatim data unless the operator explicitly opts in.
-func DropDatabase(ctx context.Context, conn *pgx.Conn, dbname string, hasData, allowed bool) error {
+func dropDatabase(ctx context.Context, conn *pgx.Conn, dbname string, hasData, allowed bool) error {
 	if err := mustNotBeEmpty("POSTGRES_DB", dbname); err != nil {
 		return err
 	}
@@ -189,19 +167,13 @@ func dropDatabaseSQL(dbname string, force bool) string {
 	return stmt
 }
 
-// ProvisionExtensions installs the extensions Nominatim requires.
+// provisionExtensions installs the extensions Nominatim requires.
 //
 // PostGIS is not a trusted extension, so CREATE EXTENSION needs superuser. Doing
 // it here, with the administrative credentials that are already required to
 // provision roles, is what lets the application role drop from SUPERUSER to
 // CREATEDB.
-func ProvisionExtensions(ctx context.Context, url string) error {
-	conn, err := pgx.Connect(ctx, url)
-	if err != nil {
-		return err
-	}
-	defer conn.Close(ctx)
-
+func provisionExtensions(ctx context.Context, conn *pgx.Conn) error {
 	// Must match what nominatim_db.tools.database_import.setup_database_skeleton
 	// creates, in dependency order — it issues CREATE EXTENSION IF NOT EXISTS for
 	// each, which succeeds without privileges only if the extension is already
@@ -225,7 +197,6 @@ func ProvisionExtensions(ctx context.Context, url string) error {
 		}
 	}
 	if len(missing) == 0 {
-		Debugf("template1 already provides the required extensions")
 		return nil
 	}
 
@@ -240,50 +211,27 @@ func ProvisionExtensions(ctx context.Context, url string) error {
 	return nil
 }
 
-// ImportComplete reports whether a finished import is recorded on the database.
-func ImportComplete(ctx context.Context, url, dbname string) (bool, error) {
-	conn, err := pgx.Connect(ctx, url)
-	if err != nil {
-		return false, nil // absent or unreachable database holds no import
-	}
-	defer conn.Close(ctx)
-
+// importComplete reports whether a finished import is recorded. Reads
+// pg_database, so any connection to the server will do.
+func importComplete(ctx context.Context, conn *pgx.Conn, dbname string) bool {
 	var comment *string
-	err = conn.QueryRow(ctx,
+	if err := conn.QueryRow(ctx,
 		"SELECT shobj_description(oid, 'pg_database') FROM pg_database WHERE datname = $1",
-		dbname).Scan(&comment)
-	if err != nil {
-		return false, nil
+		dbname).Scan(&comment); err != nil {
+		return false
 	}
-	return comment != nil && *comment == importMarker, nil
+	return comment != nil && *comment == importMarker
 }
 
-// MarkImportComplete records that the import finished. Requires ownership of
+// markImportComplete records that the import finished. Requires ownership of
 // the database, which the application role has.
-func MarkImportComplete(ctx context.Context, url, dbname string) error {
-	conn, err := pgx.Connect(ctx, url)
-	if err != nil {
-		return err
-	}
-	defer conn.Close(ctx)
-
-	_, err = conn.Exec(ctx, fmt.Sprintf("COMMENT ON DATABASE %s IS %s",
+func markImportComplete(ctx context.Context, conn *pgx.Conn, dbname string) error {
+	_, err := conn.Exec(ctx, fmt.Sprintf("COMMENT ON DATABASE %s IS %s",
 		QuoteIdentifier(dbname), QuoteLiteral(importMarker)))
 	if err != nil {
 		return fmt.Errorf("recording import completion: %w", err)
 	}
 	return nil
-}
-
-// Analyze refreshes planner statistics after the import.
-func Analyze(ctx context.Context, url string) error {
-	conn, err := pgx.Connect(ctx, url)
-	if err != nil {
-		return err
-	}
-	defer conn.Close(ctx)
-	_, err = conn.Exec(ctx, "ANALYZE")
-	return err
 }
 
 // QuoteLiteral renders s as a PostgreSQL string literal.
@@ -327,7 +275,7 @@ func mustNotBeEmpty(field, value string) error {
 // scramIterations is PostgreSQL's own default for password_encryption.
 const scramIterations = 4096
 
-// ScramVerifier builds the value PostgreSQL stores in pg_authid.rolpassword.
+// scramVerifier builds the value PostgreSQL stores in pg_authid.rolpassword.
 //
 // `ALTER ROLE x PASSWORD 'cleartext'` sends the password to the server, which
 // logs it verbatim when log_statement is 'ddl' or 'all' — on a managed provider
@@ -337,26 +285,24 @@ const scramIterations = 4096
 //
 // Format: SCRAM-SHA-256$<iterations>:<salt>$<StoredKey>:<ServerKey>, per
 // RFC 5802 with PostgreSQL's encoding.
-func ScramVerifier(password string, salt []byte, iterations int) (string, error) {
+func scramVerifier(password string, salt []byte, iterations int) (string, error) {
 	// crypto/pbkdf2 is stdlib as of Go 1.24, so x/crypto is no longer needed.
 	saltedPassword, err := pbkdf2.Key(sha256.New, password, salt, iterations, sha256.Size)
 	if err != nil {
 		return "", fmt.Errorf("deriving SCRAM key: %w", err)
 	}
 
-	clientKey := hmacSHA256(saltedPassword, []byte("Client Key"))
-	storedKey := sha256.Sum256(clientKey)
-	serverKey := hmacSHA256(saltedPassword, []byte("Server Key"))
+	mac := func(msg string) []byte {
+		m := hmac.New(sha256.New, saltedPassword)
+		m.Write([]byte(msg))
+		return m.Sum(nil)
+	}
+	storedKey := sha256.Sum256(mac("Client Key"))
+	serverKey := mac("Server Key")
 
 	b64 := base64.StdEncoding.EncodeToString
 	return fmt.Sprintf("SCRAM-SHA-256$%d:%s$%s:%s",
 		iterations, b64(salt), b64(storedKey[:]), b64(serverKey)), nil
-}
-
-func hmacSHA256(key, msg []byte) []byte {
-	m := hmac.New(sha256.New, key)
-	m.Write(msg)
-	return m.Sum(nil)
 }
 
 // saslprep normalises a password the way PostgreSQL does before hashing it.
@@ -379,7 +325,7 @@ func passwordSecret(password string) (sql string, err error) {
 	if _, err := rand.Read(salt); err != nil {
 		return "", fmt.Errorf("generating SCRAM salt: %w", err)
 	}
-	verifier, err := ScramVerifier(saslprep(password), salt, scramIterations)
+	verifier, err := scramVerifier(saslprep(password), salt, scramIterations)
 	if err != nil {
 		return "", err
 	}

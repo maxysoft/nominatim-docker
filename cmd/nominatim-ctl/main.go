@@ -45,7 +45,6 @@ func run() error {
 	ctl.RegisterSecret(c.NominatimPassword)
 	ctl.RegisterSecret(c.AdminPassword)
 	ctl.RegisterSecret(c.WebUserPassword)
-	ctl.SetDebug(c.Debug)
 
 	// Installed before any long-running work. The shell version trapped SIGTERM
 	// as its second statement; with the handler installed only around Gunicorn,

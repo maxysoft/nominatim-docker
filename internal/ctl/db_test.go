@@ -73,7 +73,7 @@ func TestScramVerifierMatchesReferenceImplementation(t *testing.T) {
 	const want = "SCRAM-SHA-256$4096:MDEyMzQ1Njc4OWFiY2RlZg==$" +
 		"ZIQVNqStZRzlOhIpyOxF6+ntWHcrs3R/7ZWYkCqWWoc=:2ieFiDOjSo2BYGVmJhMdwofseSoibXz2jJQZfuPwDxA="
 
-	got, err := ScramVerifier("s3cret-password", []byte("0123456789abcdef"), 4096)
+	got, err := scramVerifier("s3cret-password", []byte("0123456789abcdef"), 4096)
 	if err != nil {
 		t.Fatalf("ScramVerifier: %v", err)
 	}
@@ -85,7 +85,7 @@ func TestScramVerifierMatchesReferenceImplementation(t *testing.T) {
 func TestScramVerifierIsDeterministicForAGivenSalt(t *testing.T) {
 	salt := []byte("fixed-salt-16byt")
 	mk := func(pw string, s []byte) string {
-		v, err := ScramVerifier(pw, s, scramIterations)
+		v, err := scramVerifier(pw, s, scramIterations)
 		if err != nil {
 			t.Fatalf("ScramVerifier: %v", err)
 		}
@@ -168,8 +168,8 @@ func TestVerifierUsesPreparedPassword(t *testing.T) {
 	salt := []byte("0123456789abcdef")
 	// These two differ only by a SOFT HYPHEN, which SASLprep removes, so both
 	// must yield the same verifier.
-	a, _ := ScramVerifier(saslprep("I\u00ADX"), salt, scramIterations)
-	b, _ := ScramVerifier(saslprep("IX"), salt, scramIterations)
+	a, _ := scramVerifier(saslprep("I\u00ADX"), salt, scramIterations)
+	b, _ := scramVerifier(saslprep("IX"), salt, scramIterations)
 	if a != b {
 		t.Fatal("SASLprep was not applied before hashing")
 	}

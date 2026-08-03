@@ -294,8 +294,8 @@ func TestParseCPUMax(t *testing.T) {
 }
 
 func TestAvailableCPUsIsAtLeastOne(t *testing.T) {
-	if n := AvailableCPUs(); n < 1 {
-		t.Fatalf("AvailableCPUs() = %d", n)
+	if n := availableCPUs(); n < 1 {
+		t.Fatalf("availableCPUs() = %d", n)
 	}
 }
 

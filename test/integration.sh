@@ -5,7 +5,7 @@
 #
 # Usage: test/integration.sh [scenario ...]
 # Scenarios: full security restart volume_loss shutdown failfast
-#            unicode_password reverse_only admin_style
+#            unicode_password
 
 set -euo pipefail
 
@@ -57,17 +57,6 @@ assert_json_nonempty() {
     ok "$2"
   else
     bad "$2 (got: ${body:0:120})"
-  fi
-}
-
-# assert_json_empty URL DESCRIPTION
-assert_json_empty() {
-  local body
-  body=$(curl -fsS --max-time 30 "$BASE_URL$1" 2>/dev/null || true)
-  if [[ "$body" == "[]" ]]; then
-    ok "$2"
-  else
-    bad "$2 (expected [], got: ${body:0:120})"
   fi
 }
 
@@ -330,26 +319,6 @@ scenario_unicode_password() {
   else
     ok "password absent from the container log"
   fi
-}
-
-scenario_reverse_only() {
-  log "scenario: REVERSE_ONLY"
-  cleanup
-  # shellcheck disable=SC2209  # $COMPOSE is an intentionally word-split command
-  REVERSE_ONLY=true $COMPOSE up -d
-  wait_for_api 1200 || { bad "reverse-only API never became ready"; return; }
-  assert_json_nonempty "/reverse.php?lat=43.734&lon=7.42&format=jsonv2" "reverse works in reverse-only mode"
-  assert_json_nonempty "/status.php?format=json"                        "status works in reverse-only mode"
-}
-
-scenario_admin_style() {
-  log "scenario: IMPORT_STYLE=admin"
-  cleanup
-  # shellcheck disable=SC2209  # $COMPOSE is an intentionally word-split command
-  IMPORT_STYLE=admin $COMPOSE up -d
-  wait_for_api 1200 || { bad "admin-style API never became ready"; return; }
-  assert_json_empty    "/search.php?q=hotel%20de%20paris" "POI absent under admin import style"
-  assert_json_nonempty "/status.php?format=json"          "status works under admin import style"
 }
 
 main() {

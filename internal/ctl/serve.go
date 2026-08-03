@@ -10,6 +10,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // nominatimHome matches the account created in the Dockerfile.
@@ -71,13 +73,24 @@ func Serve(ctx context.Context, c *Config) error {
 	if err := EnsureVolumeOwnership(c, uid, gid); err != nil {
 		return err
 	}
+	if c.Debug {
+		// The shell version's DEBUG_MODE was `set -x`; command tracing is now
+		// unconditional (see Runner.Run), so this dumps the resolved config
+		// instead. The DSN line is withheld rather than relying on redaction:
+		// RegisterSecret ignores values shorter than four characters.
+		for _, line := range strings.Split(RenderEnvFile(c), "\n") {
+			if line != "" && !strings.HasPrefix(line, "NOMINATIM_DATABASE_DSN=") {
+				Logf("config: %s", line)
+			}
+		}
+	}
 
 	if err := ensureImported(ctx, c, r); err != nil {
 		return err
 	}
 
 	appURL := c.LibpqURL("nominatim", c.NominatimPassword, c.PostgresDB)
-	if err := WaitForDatabase(ctx, appURL, 150, 2*time.Second); err != nil {
+	if err := waitForDatabase(ctx, appURL, 150, 2*time.Second); err != nil {
 		return err
 	}
 
@@ -121,7 +134,7 @@ func ensureImported(ctx context.Context, c *Config, r *Runner) error {
 		probeURL = c.LibpqURL(adminUser, c.AdminPassword, "postgres")
 	}
 	Logf("waiting for PostgreSQL at %s:%d", c.PostgresHost, c.PostgresPort)
-	if err := WaitForDatabase(ctx, probeURL, 150, 2*time.Second); err != nil {
+	if err := waitForDatabase(ctx, probeURL, 150, 2*time.Second); err != nil {
 		if haveAdmin {
 			return err
 		}
@@ -133,19 +146,23 @@ func ensureImported(ctx context.Context, c *Config, r *Runner) error {
 		targetURL = c.LibpqURL(adminUser, c.AdminPassword, c.PostgresDB)
 	}
 
-	complete, err := ImportComplete(ctx, targetURL, c.PostgresDB)
-	if err != nil {
-		return err
+	// One connection answers both questions. A database we cannot open simply
+	// holds no import — the server itself is already known reachable — but the
+	// reason is logged, because the fallback from here is the import branch.
+	var complete, hasData bool
+	if conn, err := pgx.Connect(ctx, targetURL); err == nil {
+		complete = importComplete(ctx, conn, c.PostgresDB)
+		hasData = hasNominatimData(ctx, conn)
+		conn.Close(ctx)
+	} else {
+		Logf("cannot inspect database %q (%s); assuming it holds no import", c.PostgresDB, Redact(err.Error()))
 	}
+
 	if complete {
 		Logf("existing Nominatim import found in %q — skipping import", c.PostgresDB)
 		return chownProjectFiles(c, r.UID, r.GID)
 	}
 
-	hasData, err := HasNominatimData(ctx, targetURL)
-	if err != nil {
-		return err
-	}
 	if hasData && !c.AllowDropExistingDB {
 		// Either a database imported by an older release of this image, or an
 		// import that died part-way through. Nominatim's own validator is the
@@ -157,7 +174,10 @@ func ensureImported(ctx context.Context, c *Config, r *Runner) error {
 				"Set ALLOW_DROP_EXISTING_DB=true to discard it and import again", c.PostgresDB, err)
 		}
 		Logf("validation passed; adopting the existing import")
-		if err := MarkImportComplete(ctx, targetURL, c.PostgresDB); err != nil {
+		// Stamped with the same credentials the probe used: on the adoption
+		// path the database was not created here, so its owner is unknown and
+		// COMMENT ON DATABASE may need the admin connection.
+		if err := recordImport(ctx, targetURL, c.PostgresDB); err != nil {
 			return err
 		}
 		return chownProjectFiles(c, r.UID, r.GID)
@@ -169,7 +189,18 @@ func ensureImported(ctx context.Context, c *Config, r *Runner) error {
 	}
 	// Written only after the import has fully succeeded, so an interrupted run
 	// is retried rather than served.
-	return MarkImportComplete(ctx, c.LibpqURL("nominatim", c.NominatimPassword, c.PostgresDB), c.PostgresDB)
+	return recordImport(ctx, c.LibpqURL("nominatim", c.NominatimPassword, c.PostgresDB), c.PostgresDB)
+}
+
+// recordImport stamps the completion marker. COMMENT ON DATABASE needs
+// ownership, so the caller chooses which role connects.
+func recordImport(ctx context.Context, url, dbname string) error {
+	conn, err := pgx.Connect(ctx, url)
+	if err != nil {
+		return err
+	}
+	defer conn.Close(ctx)
+	return markImportComplete(ctx, conn, dbname)
 }
 
 // startReplication launches the background diff process, if configured.

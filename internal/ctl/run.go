@@ -30,18 +30,6 @@ type Runner struct {
 	UID, GID int
 	Dir      string
 	Env      []string
-
-	// pending holds the output filters of commands this runner started, so a
-	// trailing partial line is not lost when the child exits.
-	pending []*RedactWriter
-}
-
-// FlushOutput writes any buffered partial lines from finished children.
-func (r *Runner) FlushOutput() {
-	for _, w := range r.pending {
-		w.Flush()
-	}
-	r.pending = nil
 }
 
 // Command builds a child process that will run as r.UID/r.GID.
@@ -50,10 +38,10 @@ func (r *Runner) Command(ctx context.Context, name string, args ...string) *exec
 	cmd.Dir = r.Dir
 	cmd.Env = r.Env
 	// Child output is filtered too: a Nominatim traceback or an osm2pgsql error
-	// can otherwise echo a DSN straight into the container log.
-	outw, errw := &RedactWriter{W: os.Stdout}, &RedactWriter{W: os.Stderr}
-	cmd.Stdout, cmd.Stderr = outw, errw
-	r.pending = append(r.pending, outw, errw)
+	// can otherwise echo a DSN straight into the container log. One pair per
+	// child; Run flushes them after the child exits.
+	cmd.Stdout = &RedactWriter{W: os.Stdout}
+	cmd.Stderr = &RedactWriter{W: os.Stderr}
 	// Cancelling the context asks the child to stop rather than killing it, so
 	// Gunicorn drains and a long import is not truncated mid-transaction.
 	// WaitDelay escalates to SIGKILL if it ignores that.
@@ -77,7 +65,8 @@ func (r *Runner) Run(ctx context.Context, name string, args ...string) error {
 	Logf("+ %s %v", name, args)
 	cmd := r.Command(ctx, name, args...)
 	err := cmd.Run()
-	r.FlushOutput()
+	cmd.Stdout.(*RedactWriter).Flush()
+	cmd.Stderr.(*RedactWriter).Flush()
 	if err != nil {
 		return fmt.Errorf("%s %v: %w", name, args, err)
 	}
@@ -114,16 +103,14 @@ func WarnIfNoInit() {
 // volumes keep working across rebuilds. The shell version created it at runtime
 // with whatever UID the kernel happened to assign.
 func LookupNominatimUser() (uid, gid int, err error) {
-	name := nominatimUser
-
 	if os.Geteuid() != 0 {
 		// Already unprivileged: run everything as ourselves.
 		return os.Geteuid(), os.Getegid(), nil
 	}
 
-	u, err := user.Lookup(name)
+	u, err := user.Lookup(nominatimUser)
 	if err != nil {
-		return 0, 0, fmt.Errorf("user %q does not exist in the image: %w", name, err)
+		return 0, 0, fmt.Errorf("user %q does not exist in the image: %w", nominatimUser, err)
 	}
 	if uid, err = strconv.Atoi(u.Uid); err != nil {
 		return 0, 0, err
@@ -132,7 +119,7 @@ func LookupNominatimUser() (uid, gid int, err error) {
 		return 0, 0, err
 	}
 	if uid == 0 {
-		return 0, 0, fmt.Errorf("user %q must not be root", name)
+		return 0, 0, fmt.Errorf("user %q must not be root", nominatimUser)
 	}
 	return uid, gid, nil
 }

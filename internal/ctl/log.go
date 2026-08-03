@@ -36,20 +36,6 @@ func Redact(s string) string {
 	return s
 }
 
-var debug bool
-
-// SetDebug enables verbose logging. DEBUG_MODE used to turn on `set -x`, which
-// echoed every password into the container logs; this prints the same kind of
-// detail with secrets masked.
-func SetDebug(on bool) { debug = on }
-
-// Debugf writes a redacted line only when DEBUG_MODE is enabled.
-func Debugf(format string, args ...any) {
-	if debug {
-		fmt.Fprintln(os.Stdout, "debug: "+Redact(fmt.Sprintf(format, args...)))
-	}
-}
-
 // Logf writes a redacted line to stdout.
 func Logf(format string, args ...any) {
 	fmt.Fprintln(os.Stdout, Redact(fmt.Sprintf(format, args...)))
@@ -67,11 +53,18 @@ func Errf(format string, args ...any) {
 // went to the container log verbatim. Filtering is line-oriented, so a secret
 // split across two Write calls is still caught.
 type RedactWriter struct {
-	W   io.Writer
+	W io.Writer
+
+	// Each child gets its own writer pair, so today nothing contends. The lock
+	// stays because it costs nothing uncontended and makes the type safe if a
+	// writer is ever shared — an earlier draft did exactly that and raced.
+	mu  sync.Mutex
 	buf []byte
 }
 
 func (r *RedactWriter) Write(p []byte) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.buf = append(r.buf, p...)
 	for {
 		i := bytes.IndexByte(r.buf, '\n')
@@ -97,6 +90,8 @@ func (r *RedactWriter) Write(p []byte) (int, error) {
 
 // Flush writes any trailing partial line.
 func (r *RedactWriter) Flush() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if len(r.buf) > 0 {
 		io.WriteString(r.W, Redact(string(r.buf)))
 		r.buf = r.buf[:0]
