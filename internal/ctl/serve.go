@@ -50,10 +50,17 @@ func BaseEnv(c *Config) []string {
 }
 
 // PrepareProjectDir creates the project directory and renders the Nominatim
-// configuration into it.
+// configuration into it. It also takes ownership of NOMINATIM_HOME: under the
+// compose files' read-only root filesystem $HOME is a tmpfs mounted fresh —
+// and root-owned — on every start, and the workload must be able to write it.
 func PrepareProjectDir(c *Config, uid, gid int) error {
 	if err := os.MkdirAll(c.ProjectDir, 0o755); err != nil {
 		return err
+	}
+	if os.Geteuid() == 0 {
+		if err := os.Chown(nominatimHome, uid, gid); err != nil {
+			return fmt.Errorf("chown %s: %w", nominatimHome, err)
+		}
 	}
 	return WriteEnvFile(c, uid, gid)
 }
@@ -207,6 +214,16 @@ func recordImport(ctx context.Context, url, dbname string) error {
 func startReplication(ctx context.Context, c *Config, r *Runner) (*exec.Cmd, error) {
 	if c.ReplicationURL == "" || c.Freeze {
 		Logf("skipping replication")
+		return nil, nil
+	}
+	// nominatim replication shells out to osm2pgsql for every diff, which the
+	// serve-only image does not ship. An explicit UPDATE_MODE is a promise this
+	// image cannot keep, so it fails rather than silently serving stale data.
+	if !HaveImportTools() {
+		if c.UpdateMode != "" {
+			return nil, fmt.Errorf("UPDATE_MODE=%q needs osm2pgsql, which the serve-only image does not ship; run replication from the full image", c.UpdateMode)
+		}
+		Logf("serve-only image: skipping replication (no osm2pgsql)")
 		return nil, nil
 	}
 	dl := NewDownloader(c.UserAgent)

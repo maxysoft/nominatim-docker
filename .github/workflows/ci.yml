@@ -59,6 +59,16 @@ jobs:
           tags: nominatim:${{ steps.get_version.outputs.NOMINATIM_VERSION }}
           outputs: type=docker,dest=/tmp/nominatim.tar
 
+      # The slim serve target must at least keep building; its behaviour
+      # (refusing imports, serving an existing database read-only) is asserted
+      # by test/integration.sh scenario serve_image.
+      - name: Build serve target
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+        with:
+          context: .
+          target: serve
+          tags: nominatim:${{ steps.get_version.outputs.NOMINATIM_VERSION }}-serve
+
       - name: Upload artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -991,6 +1001,25 @@ jobs:
             org.opencontainers.image.created=${{ github.event.head_commit.timestamp }}
             org.opencontainers.image.version=${{ steps.get_version.outputs.NOMINATIM_VERSION }}
 
+      - name: Build and push serve image to Docker Hub
+        if: ${{ github.repository_owner == 'maxysoft' }}
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+        with:
+          context: .
+          target: serve
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: mode=max
+          sbom: true
+          tags: |
+            ${{ github.repository }}:v${{ steps.get_version.outputs.NOMINATIM_VERSION }}-${{ steps.get_commit.outputs.SHORT_SHA }}-serve
+            ${{ github.repository }}:serve
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.created=${{ github.event.head_commit.timestamp }}
+            org.opencontainers.image.version=${{ steps.get_version.outputs.NOMINATIM_VERSION }}
+
       - name: Build and push to GitHub Container Registry
         uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
         with:
@@ -1002,6 +1031,24 @@ jobs:
           tags: |
             ghcr.io/${{ github.repository }}:v${{ steps.get_version.outputs.NOMINATIM_VERSION }}-${{ steps.get_commit.outputs.SHORT_SHA }}
             ghcr.io/${{ github.repository }}:latest
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.created=${{ github.event.head_commit.timestamp }}
+            org.opencontainers.image.version=${{ steps.get_version.outputs.NOMINATIM_VERSION }}
+
+      - name: Build and push serve image to GitHub Container Registry
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+        with:
+          context: .
+          target: serve
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: mode=max
+          sbom: true
+          tags: |
+            ghcr.io/${{ github.repository }}:v${{ steps.get_version.outputs.NOMINATIM_VERSION }}-${{ steps.get_commit.outputs.SHORT_SHA }}-serve
+            ghcr.io/${{ github.repository }}:serve
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}

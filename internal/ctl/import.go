@@ -2,6 +2,7 @@ package ctl
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,6 +16,14 @@ import (
 func RunImport(ctx context.Context, c *Config, r *Runner) error {
 	if err := c.ValidateForImport(); err != nil {
 		return err
+	}
+
+	// Refused before any download or provisioning: the serve image cannot
+	// import, and discovering that hours in, deep inside Nominatim, helps
+	// nobody.
+	if !HaveImportTools() {
+		return errors.New("this is the serve-only image: osm2pgsql is not installed, so it cannot run an import.\n" +
+			"Run the import once with the full (non -serve) image against the same database, then start this one again")
 	}
 
 	dl := NewDownloader(c.UserAgent)

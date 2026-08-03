@@ -15,6 +15,18 @@ To also enable **Docker Hub** publishing, the repository maintainer can optional
 
 If Docker Hub secrets are not configured, images will only be pushed to GitHub Container Registry.
 
+### Image variants
+
+- **Full** (`latest`, `v<version>-<sha>`) — the default: import, replication and serving.
+- **Serve** (`serve`, `v<version>-<sha>-serve`) — API serving only; osm2pgsql and
+  postgresql-client are not installed, so the image is smaller and the long-running exposed
+  container has less attack surface. It refuses to run an import and rejects `UPDATE_MODE`:
+  run the import (and any replication) with the full image against the same database, then
+  point the serving container at this tag. Built locally with `docker build --target serve .`.
+
+All shipped compose files run the container with `read_only: true`; the runtime writes only to
+`/nominatim` (volume), `/tmp` and `$HOME` (tmpfs), and `/dev/shm`.
+
 ### Generated Tags
 
 The workflow creates tags on both registries when Docker Hub is configured:
@@ -22,10 +34,12 @@ The workflow creates tags on both registries when Docker Hub is configured:
 **GitHub Container Registry (always available):**
 - `ghcr.io/maxysoft/nominatim-docker:v<version>-<commit-sha>` - Specific version and commit (e.g., `v5.1.0-84b3d22`)
 - `ghcr.io/maxysoft/nominatim-docker:latest` - Always points to the latest master build
+- `ghcr.io/maxysoft/nominatim-docker:v<version>-<commit-sha>-serve` and `:serve` - The serve-only variant
 
 **Docker Hub (when secrets are configured):**
 - `maxysoft/nominatim-docker:v<version>-<commit-sha>` - Specific version and commit (e.g., `v5.1.0-84b3d22`)
 - `maxysoft/nominatim-docker:latest` - Always points to the latest master build
+- `maxysoft/nominatim-docker:v<version>-<commit-sha>-serve` and `:serve` - The serve-only variant
 
 ### Build Process
 

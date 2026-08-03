@@ -64,7 +64,10 @@ RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
 
 
 # ---------------------------------------------------------------------------
-# Stage 3 — runtime.
+# Stage 3 — serve: everything the long-running API container needs, and nothing
+# an import needs. osm2pgsql and postgresql-client live only in the full image
+# (next stage); the entrypoint refuses to import or replicate when osm2pgsql is
+# absent. Build with --target serve; published as the -serve tags.
 #
 # Deliberately omitted versus the previous image: sudo (a setuid-root binary
 # needed only to move privilege downwards, which the entrypoint now does with a
@@ -72,7 +75,7 @@ RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
 # are fetched over HTTPS instead of scp with host-key checking disabled), curl
 # (downloads and the healthcheck are in the entrypoint), and every -dev package.
 # ---------------------------------------------------------------------------
-FROM ${BASE_IMAGE} AS runtime
+FROM ${BASE_IMAGE} AS serve
 
 ARG NOMINATIM_VERSION
 ARG USER_AGENT
@@ -94,33 +97,11 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     rm -f /etc/apt/apt.conf.d/docker-clean \
     && echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' >/etc/apt/apt.conf.d/keep-cache \
-    && printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d \
-    && chmod +x /usr/sbin/policy-rc.d \
     && apt-get -y update -qq \
     && apt-get -y install -o APT::Install-Recommends=false -o APT::Install-Suggests=false \
         ca-certificates \
-        osm2pgsql \
-        postgresql-client \
         python3 \
         python3-icu \
-    # Debian's osm2pgsql package also ships osm2pgsql-gen, a vector-tile
-    # generalisation tool that Nominatim never invokes (it references only
-    # `osm2pgsql`). That one binary is what drags in OpenCV -> GDAL -> Mesa ->
-    # LLVM: roughly 195 MB installed, none of which the geocoder links against.
-    # Purging it in this same layer is what actually removes the bytes; doing it
-    # in a later layer would only hide them.
-    && rm -f /usr/bin/osm2pgsql-gen \
-    && dpkg --purge --force-depends \
-        libopencv-imgcodecs410 libopencv-imgproc410 libopencv-core410 \
-        libgdal36 mesa-libgallium libllvm19 libz3-4 \
-        libgbm1 libglx-mesa0 libglx0 libgl1 \
-        libgdcm3.0t64 libnetcdf22 libhdf5-310 libhdf5-hl-310 \
-        libpoppler147 libcfitsio10t64 libxerces-c3.2t64 \
-        libspatialite8t64 libgeotiff5 \
-    # Fail the build, not production, if a future package change makes
-    # osm2pgsql actually need any of the above.
-    && osm2pgsql --version \
-    && rm -f /usr/sbin/policy-rc.d \
     && rm -rf /var/lib/apt/lists/*
 
 # The account is written directly rather than with useradd, because the passwd
@@ -165,3 +146,48 @@ LABEL org.opencontainers.image.title="nominatim-docker" \
 # image, so the container can run with no-new-privileges.
 ENTRYPOINT ["/usr/local/bin/nominatim-ctl"]
 CMD ["serve"]
+
+
+# ---------------------------------------------------------------------------
+# Stage 4 — full (the default image): serve plus the import and replication
+# tooling. `nominatim import` runs osm2pgsql, and `nominatim replication`
+# shells out to it for every diff, so both capabilities live here.
+# ---------------------------------------------------------------------------
+FROM serve AS full
+
+# hadolint ignore=DL3008  # see docs/REFACTOR.md: base image is digest-pinned; apt floats deliberately
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d \
+    && chmod +x /usr/sbin/policy-rc.d \
+    && apt-get -y update -qq \
+    && apt-get -y install -o APT::Install-Recommends=false -o APT::Install-Suggests=false \
+        osm2pgsql \
+    # psql looks unused — this repo's own code talks to PostgreSQL via pgx —
+    # but `nominatim import` pipes country_osm_grid.sql.gz (and the wikipedia
+    # importance dumps) straight into a psql subprocess
+    # (nominatim_db/db/utils.py, execute_file). Removing it breaks every import.
+        postgresql-client \
+    # Debian's osm2pgsql package also ships osm2pgsql-gen, a vector-tile
+    # generalisation tool that Nominatim never invokes (it references only
+    # `osm2pgsql`). That one binary is what drags in OpenCV -> GDAL -> Mesa ->
+    # LLVM: roughly 195 MB installed, none of which the geocoder links against.
+    # Purging it in this same layer is what actually removes the bytes; doing it
+    # in a later layer would only hide them.
+    && rm -f /usr/bin/osm2pgsql-gen \
+    && dpkg --purge --force-depends \
+        libopencv-imgcodecs410 libopencv-imgproc410 libopencv-core410 \
+        libgdal36 mesa-libgallium libllvm19 libz3-4 \
+        libgbm1 libglx-mesa0 libglx0 libgl1 \
+        libgdcm3.0t64 libnetcdf22 libhdf5-310 libhdf5-hl-310 \
+        libpoppler147 libcfitsio10t64 libxerces-c3.2t64 \
+        libspatialite8t64 libgeotiff5 \
+    # Fail the build, not production, if a future package change makes
+    # osm2pgsql actually need any of the above.
+    && osm2pgsql --version \
+    && rm -f /usr/sbin/policy-rc.d \
+    && rm -rf /var/lib/apt/lists/* \
+    # The serve stage already stripped and asserted; re-strip and re-assert in
+    # case a package installed here ships a setuid/setgid binary.
+    && find / -xdev -type f -perm /6000 -exec chmod ug-s {} + \
+    && [ -z "$(find / -xdev -type f -perm /6000)" ]

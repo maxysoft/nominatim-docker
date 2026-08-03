@@ -98,6 +98,21 @@ Fixes from an independent review of the refactor itself:
 - **Added:** `NOMINATIM_WEBUSER_PASSWORD`, so the read-only API role no longer shares the application
   role's password. Reject `=` as well as `;` in passwords — both are Nominatim DSN separators.
 
+Serve/import split and immutable root filesystem:
+
+- **Added:** A slim `serve` build target (`docker build --target serve`), published as the `serve`
+  and `v<version>-<sha>-serve` tags. It ships without osm2pgsql and postgresql-client, so the
+  long-running exposed container is smaller and has less attack surface. It serves an existing
+  import and refuses — fast, with the remediation in the message — to run an import; an explicit
+  `UPDATE_MODE` on it is a startup error rather than silently stale data.
+- **Changed:** Every shipped compose file now runs the container with `read_only: true`. Writes are
+  confined to `/nominatim` (volume), `/tmp` and `$HOME` (tmpfs), and `/dev/shm`. The entrypoint
+  takes ownership of `$HOME` at startup, because a tmpfs is mounted fresh — and root-owned — on
+  every boot.
+- **Test:** A `serve_image` integration scenario builds the serve target, asserts osm2pgsql and psql
+  are absent, asserts the fail-fast refusal against an empty database, and serves an existing import
+  under `--read-only`.
+
 ### v5.3.2 — 2026-04-22
 
 - **Changed:** Merge from upstream (mediagis/nominatim-docker) to sync docs and contributors

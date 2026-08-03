@@ -4,7 +4,7 @@
 # PostGIS container, and asserts the same behaviour the CI matrix checks.
 #
 # Usage: test/integration.sh [scenario ...]
-# Scenarios: full security restart volume_loss shutdown failfast
+# Scenarios: full security restart volume_loss serve_image shutdown failfast
 #            unicode_password
 
 set -euo pipefail
@@ -26,6 +26,8 @@ ok()   { printf '  \033[32mPASS\033[0m %s\n' "$*"; pass=$((pass + 1)); }
 bad()  { printf '  \033[31mFAIL\033[0m %s\n' "$*"; fail=$((fail + 1)); }
 
 cleanup() {
+  docker rm -f itest-serve >/dev/null 2>&1 || true
+  docker volume rm -f nominatim-itest-serve >/dev/null 2>&1 || true
   $COMPOSE down --volumes --remove-orphans >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
@@ -247,6 +249,76 @@ scenario_volume_loss() {
   fi
 }
 
+# The slim --target serve image must serve an existing import, but refuse to
+# create one. Runs while the stack from earlier scenarios is up and imported.
+scenario_serve_image() {
+  log "scenario: serve-only image"
+
+  log "building $IMAGE-serve"
+  DOCKER_BUILDKIT=1 docker build --target serve -t "$IMAGE-serve" .
+
+  for binary in osm2pgsql psql; do
+    if docker run --rm --entrypoint sh "$IMAGE-serve" -c "command -v $binary" >/dev/null 2>&1; then
+      bad "$binary is still present in the serve image"
+    else
+      ok "$binary absent from the serve image"
+    fi
+  done
+
+  # Against a database that holds no import it must fail fast and say why,
+  # before downloading or provisioning anything.
+  local out rc
+  set +e
+  out=$(docker run --rm --network nominatim-itest_default \
+        -e POSTGRES_HOST=postgres \
+        -e POSTGRES_DB=nominatim_missing \
+        -e POSTGRES_SSLMODE=disable \
+        -e NOMINATIM_PASSWORD=x \
+        -e POSTGRES_ADMIN_PASSWORD=itest-admin-password \
+        -e PBF_URL=https://example.invalid/a.pbf \
+        "$IMAGE-serve" serve 2>&1)
+  rc=$?
+  set -e
+  if [[ $rc -ne 0 ]] && grep -q 'serve-only' <<<"$out"; then
+    ok "serve image refuses to run an import"
+  else
+    bad "serve image did not refuse the import (rc=$rc): ${out:0:200}"
+  fi
+
+  # And it must serve the import the full image created — on a read-only root
+  # filesystem, which is how the shipped compose files run it. The project dir
+  # is a named volume, not a tmpfs: volumes seed ownership from the image,
+  # tmpfs mounts come up root-owned.
+  docker rm -f itest-serve >/dev/null 2>&1 || true
+  docker run -d --name itest-serve --network nominatim-itest_default \
+    --read-only --tmpfs /tmp --tmpfs /var/lib/nominatim \
+    -v nominatim-itest-serve:/nominatim \
+    --shm-size 256m \
+    -e POSTGRES_HOST=postgres \
+    -e POSTGRES_DB=nominatim \
+    -e POSTGRES_SSLMODE=disable \
+    -e NOMINATIM_PASSWORD="${ITEST_PASSWORD:-itest-nominatim-password}" \
+    -e GUNICORN_WORKERS=2 \
+    -p "127.0.0.1:$((ITEST_PORT + 1)):8080" \
+    "$IMAGE-serve" >/dev/null
+
+  local ready=0
+  for _ in $(seq 1 60); do
+    if curl -fsS --max-time 5 "http://127.0.0.1:$((ITEST_PORT + 1))/status.php?format=json" >/dev/null 2>&1; then
+      ready=1
+      break
+    fi
+    sleep 2
+  done
+  if [[ $ready -eq 1 ]]; then
+    ok "serve image serves the existing import on a read-only root filesystem"
+  else
+    bad "serve image never became ready"
+    docker logs --tail 30 itest-serve || true
+  fi
+  docker rm -f itest-serve >/dev/null 2>&1 || true
+}
+
 # A crashed API must not report success, and a stop must exit 0 promptly.
 scenario_shutdown() {
   log "scenario: shutdown semantics"
@@ -324,7 +396,7 @@ scenario_unicode_password() {
 main() {
   local scenarios=("$@")
   if [[ ${#scenarios[@]} -eq 0 ]]; then
-    scenarios=(full security restart volume_loss shutdown failfast unicode_password)
+    scenarios=(full security restart volume_loss serve_image shutdown failfast unicode_password)
   fi
 
   build_image

@@ -82,6 +82,14 @@ func (r *Runner) WithEnv(extra ...string) *Runner {
 	return &c
 }
 
+// HaveImportTools reports whether osm2pgsql is installed. The slim serve image
+// (Dockerfile --target serve) ships without it, and with it goes the ability
+// to run an import or apply replication diffs.
+func HaveImportTools() bool {
+	_, err := exec.LookPath("osm2pgsql")
+	return err == nil
+}
+
 // WarnIfNoInit notes that orphan reaping is delegated to the container runtime.
 //
 // A generic `Wait4(-1, WNOHANG)` reaper cannot be combined with os/exec: it

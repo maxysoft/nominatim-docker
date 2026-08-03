@@ -60,6 +60,12 @@ services:
     init: true
     security_opt:
       - no-new-privileges:true
+    # Nothing outside /nominatim (volume), /tmp and $HOME (tmpfs below), and
+    # /dev/shm is ever written, so the root filesystem can be immutable.
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/lib/nominatim
     cap_drop:
       - ALL
     cap_add:
