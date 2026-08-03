@@ -15,8 +15,7 @@ var (
 )
 
 // RegisterSecret marks a value to be masked in anything this process logs.
-// DEBUG_MODE previously enabled `set -x`, which echoed every password to stdout
-// and therefore into the container logs.
+// Values shorter than four characters are ignored as masking noise.
 func RegisterSecret(s string) {
 	if len(s) < 4 {
 		return
@@ -46,19 +45,13 @@ func Errf(format string, args ...any) {
 	fmt.Fprintln(os.Stderr, Redact(fmt.Sprintf(format, args...)))
 }
 
-// RedactWriter filters a child process's output through the secret masker.
-//
-// Only what this process logs itself was previously redacted; a Python
-// traceback from Nominatim, or an osm2pgsql error echoing a connection string,
-// went to the container log verbatim. Filtering is line-oriented, so a secret
-// split across two Write calls is still caught.
+// RedactWriter filters a child process's output through the secret masker,
+// line by line, so a traceback or driver error cannot echo a DSN into the
+// container log — even when a secret is split across Write calls.
 type RedactWriter struct {
 	W io.Writer
 
-	// Each child gets its own writer pair, so today nothing contends. The lock
-	// stays because it costs nothing uncontended and makes the type safe if a
-	// writer is ever shared — an earlier draft did exactly that and raced.
-	mu  sync.Mutex
+	mu  sync.Mutex // writers are per-child today; the lock keeps sharing safe
 	buf []byte
 }
 
@@ -77,8 +70,7 @@ func (r *RedactWriter) Write(p []byte) (int, error) {
 			return 0, err
 		}
 	}
-	// Cap the pending partial line so a child emitting a very long line without
-	// a newline cannot grow this buffer without bound.
+	// Flush an over-long partial line so the buffer cannot grow unbounded.
 	if len(r.buf) > 1<<20 {
 		if _, err := io.WriteString(r.W, Redact(string(r.buf))); err != nil {
 			return 0, err

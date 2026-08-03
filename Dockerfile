@@ -29,16 +29,10 @@ RUN --mount=type=cache,target=/go/pkg/mod,sharing=locked \
 
 
 # ---------------------------------------------------------------------------
-# Stage 2 — the Python environment.
-#
-# Built into a virtualenv rather than installed over the system interpreter with
-# --break-system-packages, so pip never overwrites dpkg-owned files and the
-# whole runtime is one directory to copy.
-#
-# --system-site-packages so PyICU is taken from Debian's prebuilt python3-icu.
-# PyICU ships no wheel, so pip would compile a C++ extension — and on the arm64
-# publish leg that happens under QEMU. Every other dependency is a wheel, which
-# is why no compiler is installed here at all.
+# Stage 2 — the Python environment, built as a venv so it copies as one
+# directory. --system-site-packages pulls PyICU from Debian's python3-icu: it
+# ships no wheel, and compiling it under QEMU on the arm64 leg is why no
+# compiler is installed here at all.
 # ---------------------------------------------------------------------------
 FROM ${BASE_IMAGE} AS py-build
 
@@ -64,16 +58,10 @@ RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
 
 
 # ---------------------------------------------------------------------------
-# Stage 3 — serve: everything the long-running API container needs, and nothing
-# an import needs. osm2pgsql and postgresql-client live only in the full image
-# (next stage); the entrypoint refuses to import or replicate when osm2pgsql is
-# absent. Build with --target serve; published as the -serve tags.
-#
-# Deliberately omitted versus the previous image: sudo (a setuid-root binary
-# needed only to move privilege downwards, which the entrypoint now does with a
-# direct fork+setuid), sshpass and openssh-client (the supplementary datasets
-# are fetched over HTTPS instead of scp with host-key checking disabled), curl
-# (downloads and the healthcheck are in the entrypoint), and every -dev package.
+# Stage 3 — serve: what the long-running API container needs, nothing more.
+# osm2pgsql and postgresql-client live only in the full image (next stage);
+# the entrypoint refuses to import or replicate without them.
+# Build with --target serve; published as the -serve tags.
 # ---------------------------------------------------------------------------
 FROM ${BASE_IMAGE} AS serve
 
@@ -104,11 +92,8 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         python3-icu \
     && rm -rf /var/lib/apt/lists/*
 
-# The account is written directly rather than with useradd, because the passwd
-# package that provides it also installs five setuid-root binaries. The previous
-# image ran useradd at container start, so the UID was whatever the kernel
-# happened to assign — and a data volume written by one build could be
-# unreadable to the next.
+# Written directly instead of via useradd, whose package ships five
+# setuid-root binaries. Fixed IDs keep data volumes working across rebuilds.
 RUN echo "nominatim:x:${NOMINATIM_UID}:${NOMINATIM_GID}::${NOMINATIM_HOME}:/usr/sbin/nologin" >> /etc/passwd \
     && echo "nominatim:x:${NOMINATIM_GID}:" >> /etc/group \
     && echo "nominatim:!*:20000:0:99999:7:::" >> /etc/shadow \
@@ -118,11 +103,8 @@ RUN echo "nominatim:x:${NOMINATIM_UID}:${NOMINATIM_GID}::${NOMINATIM_HOME}:/usr/
 COPY --from=py-build /opt/nominatim /opt/nominatim
 COPY --from=go-build /out/nominatim-ctl /usr/local/bin/nominatim-ctl
 
-# Strip every setuid/setgid bit the base packages ship (passwd, su, mount,
-# gpasswd, ...). Nothing here needs them: the entrypoint starts as root and
-# lowers privilege with a direct setuid, which requires no setuid binary. What
-# remains is a local privilege-escalation surface reachable by the very account
-# Gunicorn runs as, so it is removed rather than merely left unused.
+# Strip every setuid/setgid bit the base packages ship. The entrypoint drops
+# privilege with a direct setuid, so they are only an escalation surface.
 RUN find / -xdev -type f -perm /6000 -exec chmod ug-s {} + \
     && [ -z "$(find / -xdev -type f -perm /6000)" ]
 
@@ -141,9 +123,8 @@ LABEL org.opencontainers.image.title="nominatim-docker" \
       org.opencontainers.image.source="https://github.com/maxysoft/nominatim-docker" \
       org.opencontainers.image.licenses="GPL-2.0-or-later"
 
-# Starts as root only to take ownership of the mounted volume; every workload
-# process is spawned as the nominatim user. No setuid binary remains in the
-# image, so the container can run with no-new-privileges.
+# Root only to take ownership of the mounted volume; every workload process
+# runs as the nominatim user, and no setuid binary remains in the image.
 ENTRYPOINT ["/usr/local/bin/nominatim-ctl"]
 CMD ["serve"]
 
@@ -163,17 +144,13 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     && apt-get -y update -qq \
     && apt-get -y install -o APT::Install-Recommends=false -o APT::Install-Suggests=false \
         osm2pgsql \
-    # psql looks unused — this repo's own code talks to PostgreSQL via pgx —
-    # but `nominatim import` pipes country_osm_grid.sql.gz (and the wikipedia
-    # importance dumps) straight into a psql subprocess
-    # (nominatim_db/db/utils.py, execute_file). Removing it breaks every import.
+    # psql looks unused (this repo talks to PostgreSQL via pgx), but
+    # `nominatim import` pipes country_osm_grid.sql.gz and the wikipedia
+    # importance dumps into a psql subprocess. Removing it breaks every import.
         postgresql-client \
-    # Debian's osm2pgsql package also ships osm2pgsql-gen, a vector-tile
-    # generalisation tool that Nominatim never invokes (it references only
-    # `osm2pgsql`). That one binary is what drags in OpenCV -> GDAL -> Mesa ->
-    # LLVM: roughly 195 MB installed, none of which the geocoder links against.
-    # Purging it in this same layer is what actually removes the bytes; doing it
-    # in a later layer would only hide them.
+    # osm2pgsql-gen (never invoked by Nominatim) is what drags in OpenCV ->
+    # GDAL -> Mesa -> LLVM: ~195 MB nothing links against. Purging in this
+    # same layer is what actually removes the bytes.
     && rm -f /usr/bin/osm2pgsql-gen \
     && dpkg --purge --force-depends \
         libopencv-imgcodecs410 libopencv-imgproc410 libopencv-core410 \

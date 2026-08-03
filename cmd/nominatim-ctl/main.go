@@ -1,8 +1,6 @@
-// Command nominatim-ctl is the container entrypoint for nominatim-docker.
-//
-// It replaces config.sh, init.sh and start.sh: it renders the Nominatim project
-// configuration, provisions the external PostgreSQL database, runs the import
-// when one is needed, and supervises the API server.
+// Command nominatim-ctl is the container entrypoint for nominatim-docker: it
+// renders the project configuration, provisions the external PostgreSQL
+// database, runs the import when one is needed, and supervises the API server.
 package main
 
 import (
@@ -46,9 +44,8 @@ func run() error {
 	ctl.RegisterSecret(c.AdminPassword)
 	ctl.RegisterSecret(c.WebUserPassword)
 
-	// Installed before any long-running work. The shell version trapped SIGTERM
-	// as its second statement; with the handler installed only around Gunicorn,
-	// a stop during a multi-day import would kill the process with exit 2.
+	// Installed before any long-running work, so a stop during a multi-day
+	// import still exits cleanly instead of dying with exit 2.
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()
 	ctl.WarnIfNoInit()
@@ -83,7 +80,7 @@ func run() error {
 	return runErr
 }
 
-// loopback rewrites a bind address into something reachable from inside the
+// loopback rewrites the bind address into one reachable from inside the
 // container, so the healthcheck follows GUNICORN_BIND.
 func loopback(bind string) string {
 	if strings.HasPrefix(bind, ":") {

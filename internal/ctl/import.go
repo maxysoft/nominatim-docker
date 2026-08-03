@@ -18,9 +18,7 @@ func RunImport(ctx context.Context, c *Config, r *Runner) error {
 		return err
 	}
 
-	// Refused before any download or provisioning: the serve image cannot
-	// import, and discovering that hours in, deep inside Nominatim, helps
-	// nobody.
+	// Refused before any download or provisioning happens.
 	if !HaveImportTools() {
 		return errors.New("this is the serve-only image: osm2pgsql is not installed, so it cannot run an import.\n" +
 			"Run the import once with the full (non -serve) image against the same database, then start this one again")
@@ -64,8 +62,8 @@ func RunImport(ctx context.Context, c *Config, r *Runner) error {
 		}
 	}
 
-	// The initial import can leave parent places flagged for indexing, which
-	// makes --check-database report "N entries are not yet indexed".
+	// The import can leave parent places flagged for indexing, which would
+	// make --check-database report unindexed entries.
 	if err := r.Run(ctx, "nominatim", "index", "--threads", fmt.Sprint(c.Threads), "--project-dir", c.ProjectDir); err != nil {
 		return err
 	}
@@ -96,7 +94,7 @@ func RunImport(ctx context.Context, c *Config, r *Runner) error {
 	return nil
 }
 
-// fetchDatasets resolves the five optional supplementary datasets.
+// fetchDatasets resolves the optional supplementary datasets.
 func fetchDatasets(ctx context.Context, c *Config, dl *Downloader) error {
 	for _, d := range Datasets {
 		v := c.DatasetValues[d.EnvVar]
@@ -109,10 +107,9 @@ func fetchDatasets(ctx context.Context, c *Config, dl *Downloader) error {
 				return fmt.Errorf("%s: %w", d.Label, err)
 			}
 		case v != "" && v != "false":
-			// Absolute-path form, already validated by Config.Validate.
+			// Absolute-path form, already validated. Remove first: a stale
+			// symlink from a failed import would die on "file exists".
 			Logf("linking %s from %s", d.Label, v)
-			// Remove first: a failed import previously left the symlink behind
-			// and every retry then died on "file exists".
 			_ = os.Remove(dest)
 			if err := os.Symlink(v, dest); err != nil {
 				return fmt.Errorf("%s: %w", d.Label, err)
@@ -124,9 +121,8 @@ func fetchDatasets(ctx context.Context, c *Config, dl *Downloader) error {
 	return nil
 }
 
-// provisionDatabase creates the roles and clears any stale database, using the
-// administrative credentials. The application role is deliberately not a
-// superuser.
+// provisionDatabase creates the roles and clears any stale database using the
+// administrative credentials. The application role is not a superuser.
 func provisionDatabase(ctx context.Context, c *Config) error {
 	adminURL := c.LibpqURL(adminUser, c.AdminPassword, "postgres")
 	Logf("waiting for PostgreSQL at %s:%d", c.PostgresHost, c.PostgresPort)
@@ -134,8 +130,8 @@ func provisionDatabase(ctx context.Context, c *Config) error {
 		return err
 	}
 
-	// Bounded: a server that accepts TCP but stalls the startup handshake would
-	// otherwise block here with no diagnostic.
+	// Bounded probe: a server that accepts TCP but stalls the handshake must
+	// not block here without a diagnostic.
 	probeCtx, cancelProbe := context.WithTimeout(ctx, 15*time.Second)
 	defer cancelProbe()
 	var hasData bool
@@ -150,9 +146,7 @@ func provisionDatabase(ctx context.Context, c *Config) error {
 	}
 	defer conn.Close(ctx)
 
-	// CREATEDB is all the import needs beyond ownership of its own database.
-	// Installing PostGIS is the only step that genuinely required superuser, and
-	// it is done below with the administrative connection instead.
+	// CREATEDB is all the import needs once PostGIS is pre-installed below.
 	if err := ensureRole(ctx, conn, "nominatim", c.NominatimPassword, c.RoleOptions); err != nil {
 		return err
 	}
@@ -164,20 +158,15 @@ func provisionDatabase(ctx context.Context, c *Config) error {
 		return err
 	}
 
-	// A superuser role installs its own extensions during the import, so there
-	// is nothing to pre-seed and no reason to touch template1.
+	// A superuser role installs its own extensions; nothing to pre-seed then.
 	if c.ProvisionExtensions && !strings.Contains(strings.ToUpper(c.RoleOptions), "SUPERUSER") {
-		// Installed into template1 so the database the application role creates
-		// inherits them; Nominatim's own CREATE EXTENSION IF NOT EXISTS then
-		// short-circuits instead of demanding superuser.
 		tmpl, err := pgx.Connect(ctx, c.LibpqURL(adminUser, c.AdminPassword, "template1"))
 		if err != nil {
 			return err
 		}
 		err = provisionExtensions(ctx, tmpl)
-		// Closed here, not deferred: Nominatim's import runs
-		// CREATE DATABASE ... TEMPLATE template1, which fails while a session
-		// is still attached to template1.
+		// Closed here, not deferred: the import's CREATE DATABASE ... TEMPLATE
+		// template1 fails while a session is still attached to template1.
 		tmpl.Close(ctx)
 		if err != nil {
 			return fmt.Errorf("installing PostGIS into template1 (set PROVISION_EXTENSIONS=false if your "+
@@ -187,7 +176,7 @@ func provisionDatabase(ctx context.Context, c *Config) error {
 	return nil
 }
 
-// configureReplicationOrFreeze mirrors the original post-import branch.
+// configureReplicationOrFreeze runs the post-import replication/freeze branch.
 func configureReplicationOrFreeze(ctx context.Context, c *Config, r *Runner, dl *Downloader) error {
 	if c.ReplicationURL != "" && !dl.Reachable(ctx, c.ReplicationURL, 3, 2*time.Second) {
 		Logf("WARNING: REPLICATION_URL unreachable; continuing without replication")
@@ -219,9 +208,8 @@ func warmCaches(ctx context.Context, c *Config, r *Runner) error {
 	return warm.Run(ctx, "nominatim", args...)
 }
 
-// cleanupDownloads removes exactly the files the import created. The previous
-// `rm -f ${PROJECT_DIR}/*sql.gz` also matched operator files that happened to
-// end in those characters.
+// cleanupDownloads removes exactly the files the import created — never a
+// glob, which could match operator files too.
 func cleanupDownloads(c *Config) {
 	Logf("removing downloaded dumps in %s", c.ProjectDir)
 	for _, d := range Datasets {
@@ -232,9 +220,8 @@ func cleanupDownloads(c *Config) {
 	}
 }
 
-// chownProjectFiles gives the unprivileged user ownership of the paths it has
-// to write, without recursing over operator data mounted under the project
-// directory.
+// chownProjectFiles gives the unprivileged user the paths it must write,
+// without recursing over operator data mounted under the project directory.
 func chownProjectFiles(c *Config, uid, gid int) error {
 	if os.Geteuid() != 0 {
 		return nil

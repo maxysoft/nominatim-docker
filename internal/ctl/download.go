@@ -15,28 +15,23 @@ import (
 	"time"
 )
 
-// Downloader fetches files over HTTPS.
-//
-// This replaces `sshpass -p <password> scp -o StrictHostKeyChecking=no`.
-// Disabling host key checking removed the only authentication of the remote
-// server, and one of the fetched artifacts is a SQL dump that is subsequently
-// executed against the database — so anyone able to spoof the storage host
-// could execute arbitrary SQL. HTTPS with the system CA bundle authenticates
-// the server and needs no credentials, since every file is public.
+// Downloader fetches files over HTTPS, authenticated by the system CA bundle.
+// One of the fetched artifacts is a SQL dump that is executed against the
+// database, so server authentication is not optional.
 type Downloader struct {
 	Client    *http.Client
 	UserAgent string
 
-	// Attempts is the total number of tries per file. A planet PBF is ~80 GB
-	// and takes hours; a single transient reset should not discard it.
+	// Attempts is the total number of tries per file: a planet PBF takes
+	// hours, and one transient reset must not discard it.
 	Attempts int
 	// Backoff is the delay before the second attempt, doubled each time.
 	Backoff time.Duration
 }
 
-// NewDownloader returns a Downloader with timeouts appropriate for multi-GB
-// files on a slow link: no overall deadline, but a bounded handshake and a
-// response-header timeout so a black-holed connection cannot hang forever.
+// NewDownloader returns a Downloader tuned for multi-GB files on a slow link:
+// no overall deadline, but bounded handshake and response-header timeouts so
+// a black-holed connection cannot hang forever.
 func NewDownloader(userAgent string) *Downloader {
 	return &Downloader{
 		UserAgent: userAgent,
@@ -58,9 +53,9 @@ type errPermanent struct{ err error }
 func (e errPermanent) Error() string { return e.err.Error() }
 func (e errPermanent) Unwrap() error { return e.err }
 
-// Fetch downloads url to dest, resuming a partial file when the server supports
-// it and retrying transient failures. When sha256Hex is non-empty the completed
-// file is verified and removed on mismatch.
+// Fetch downloads url to dest, resuming a partial file when the server
+// supports it and retrying transient failures. When sha256Hex is non-empty
+// the completed file is verified and removed on mismatch.
 func (d *Downloader) Fetch(ctx context.Context, url, dest, sha256Hex string) error {
 	attempts := d.Attempts
 	if attempts < 1 {
@@ -123,10 +118,8 @@ func (d *Downloader) fetchOnce(ctx context.Context, url, dest, sha256Hex string)
 	case http.StatusOK:
 		flags |= os.O_TRUNC // server ignored the range; start over
 	case http.StatusPartialContent:
-		// Trust the range only if the server says it starts where we do. A
-		// mismatched offset would splice unrelated bytes into the file — for
-		// example when a partial download from a previous, different URL is
-		// still lying in the project directory.
+		// Trust the range only if it starts where our file ends; a mismatched
+		// offset would splice unrelated bytes into the file.
 		if start, ok := parseContentRangeStart(resp.Header.Get("Content-Range")); !ok || start != offset {
 			Logf("server returned an unexpected Content-Range (%q, wanted start %d); restarting download",
 				resp.Header.Get("Content-Range"), offset)
@@ -205,8 +198,9 @@ func verifyChecksum(path, want string) error {
 	return nil
 }
 
-// Reachable reports whether url answers within timeout. Used to decide whether
-// replication can be configured at all.
+// Reachable reports whether url answers within the attempt budget; used to
+// decide whether replication can be configured at all. Failures are logged so
+// an unreachable URL is distinguishable from a typo.
 func (d *Downloader) Reachable(ctx context.Context, url string, attempts int, delay time.Duration) bool {
 	for i := 0; i < attempts; i++ {
 		if i > 0 {
@@ -230,8 +224,6 @@ func (d *Downloader) Reachable(ctx context.Context, url string, attempts int, de
 			if resp.StatusCode < 400 {
 				return true
 			}
-			// The reason is logged: the shell version discarded it, so an
-			// unreachable replication URL was indistinguishable from a typo.
 			Logf("replication URL %s returned %s (attempt %d/%d)", url, resp.Status, i+1, attempts)
 			continue
 		}

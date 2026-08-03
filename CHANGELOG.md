@@ -60,10 +60,6 @@ Follow-up hardening (closes the remaining documented gaps):
   rather than being compiled from an sdist. It has no wheel, so the arm64 publish leg was compiling
   a C++ extension under QEMU. Every other dependency is a wheel, so the build stage no longer
   installs a compiler at all.
-- **Added:** A startup check that the unprivileged user can write the project directory, with the
-  exact remediation command. A volume from the pre-refactor image is root-owned, and the failure
-  previously surfaced much later as an opaque Nominatim error. `FIX_VOLUME_OWNERSHIP=true` repairs
-  it in place.
 - **Docs:** Three previously undeclared behaviour changes are now in Breaking changes — a
   non-integer replication interval is a startup error, the new Gunicorn defaults, and the
   `template1` modification.
@@ -121,6 +117,11 @@ Repository cleanup from an over-engineering audit:
   `mediagis/nominatim-docker`. The credit is now a link to the upstream list.
 - **Changed:** The 16 CI scenarios share one `start-postgres` helper instead of carrying 16 copies
   of the PostgreSQL bootstrap (−291 lines in ci.yml).
+- **Removed:** The pre-refactor volume migration path (`FIX_VOLUME_OWNERSHIP` and the ownership
+  pre-check). Volumes written by the shell-era image are no longer repaired automatically; chown
+  them once by hand if you still have one.
+- **Changed:** In-code comments rewritten to be short; the shell-era history they narrated lives in
+  docs/REFACTOR.md and git history.
 - **Docs:** Fixed stale claims left from before the refactor: `POSTGRES_ADMIN_PASSWORD` was
   documented as defaulting to `NOMINATIM_PASSWORD` (it is required and never derived), the container
   was said to expose PostgreSQL on 5432 (there is no PostgreSQL in this image), the project volume

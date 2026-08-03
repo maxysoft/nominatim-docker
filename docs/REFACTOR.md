@@ -219,7 +219,6 @@ are pinned to commit SHAs and the workflow has a least-privilege
 | `GUNICORN_BIND` | `0.0.0.0:8080` | Bind address |
 | `GUNICORN_TIMEOUT`, `GUNICORN_GRACEFUL_TIMEOUT` | `60`, `30` | Request and drain deadlines |
 | `NOMINATIM_WEBUSER_PASSWORD` | falls back to `NOMINATIM_PASSWORD` | Separate password for the read-only API role |
-| `FIX_VOLUME_OWNERSHIP` | `false` | Recursively take ownership of the project directory, for migrating a volume from the old image |
 | `NOMINATIM_WEBUSER` | `www-data` | Read-only role name |
 
 **Removed:** `STORAGE_USER`, `STORAGE_HOST`, `STORAGE_PASSWORD` — superseded by

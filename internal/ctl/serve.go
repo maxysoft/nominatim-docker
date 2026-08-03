@@ -17,13 +17,9 @@ import (
 // nominatimHome matches the account created in the Dockerfile.
 const nominatimHome = "/var/lib/nominatim"
 
-// BaseEnv is the environment handed to every child process.
-//
-// It is an explicit allow-list plus every NOMINATIM_* and PG* variable present
-// in the container environment. The shell version used `sudo -E`, so operators
-// could tune any Nominatim setting (NOMINATIM_SEARCH_*, NOMINATIM_LOG_DB, ...)
-// or supply libpq TLS material (PGSSLROOTCERT) by passing it to the container;
-// a bare allow-list would have silently dropped all of that.
+// BaseEnv is the environment handed to every child process: a fixed base plus
+// every NOMINATIM_* and PG* variable from the container environment, so
+// operators can tune Nominatim settings and supply libpq TLS material.
 func BaseEnv(c *Config) []string {
 	env := []string{
 		"PATH=" + envOr("PATH", "/usr/local/bin:/usr/bin:/bin"),
@@ -37,7 +33,7 @@ func BaseEnv(c *Config) []string {
 		if !ok {
 			continue
 		}
-		// Passed through, except the DSN, which this process owns.
+		// The DSN is owned by this process.
 		if k == "NOMINATIM_DATABASE_DSN" {
 			continue
 		}
@@ -49,10 +45,9 @@ func BaseEnv(c *Config) []string {
 	return append(env, "NOMINATIM_DATABASE_DSN="+c.DSN("nominatim", c.NominatimPassword))
 }
 
-// PrepareProjectDir creates the project directory and renders the Nominatim
-// configuration into it. It also takes ownership of NOMINATIM_HOME: under the
-// compose files' read-only root filesystem $HOME is a tmpfs mounted fresh —
-// and root-owned — on every start, and the workload must be able to write it.
+// PrepareProjectDir creates the project directory, renders the configuration
+// into it, and takes ownership of NOMINATIM_HOME — under a read-only root
+// filesystem $HOME is a tmpfs mounted fresh, and root-owned, on every boot.
 func PrepareProjectDir(c *Config, uid, gid int) error {
 	if err := os.MkdirAll(c.ProjectDir, 0o755); err != nil {
 		return err
@@ -77,13 +72,8 @@ func Serve(ctx context.Context, c *Config) error {
 	if err := PrepareProjectDir(c, uid, gid); err != nil {
 		return err
 	}
-	if err := EnsureVolumeOwnership(c, uid, gid); err != nil {
-		return err
-	}
 	if c.Debug {
-		// The shell version's DEBUG_MODE was `set -x`; command tracing is now
-		// unconditional (see Runner.Run), so this dumps the resolved config
-		// instead. The DSN line is withheld rather than relying on redaction:
+		// The DSN line is withheld rather than relying on redaction:
 		// RegisterSecret ignores values shorter than four characters.
 		for _, line := range strings.Split(RenderEnvFile(c), "\n") {
 			if line != "" && !strings.HasPrefix(line, "NOMINATIM_DATABASE_DSN=") {
@@ -128,14 +118,11 @@ func Serve(ctx context.Context, c *Config) error {
 }
 
 // ensureImported decides whether an import is required, and runs one if so.
-//
-// The decision is made only after the server is known to be reachable. Reading
-// it from a failed connection would treat a database that is merely still
-// booting as an empty one, and take the import branch on a routine restart.
+// The decision is made only after the server is known reachable — a booting
+// database must not be mistaken for an empty one on a routine restart.
 func ensureImported(ctx context.Context, c *Config, r *Runner) error {
 	haveAdmin := c.AdminPassword != ""
 
-	// Reach the server first, using whichever credentials exist.
 	probeURL := c.LibpqURL("nominatim", c.NominatimPassword, c.PostgresDB)
 	if haveAdmin {
 		probeURL = c.LibpqURL(adminUser, c.AdminPassword, "postgres")
@@ -153,9 +140,8 @@ func ensureImported(ctx context.Context, c *Config, r *Runner) error {
 		targetURL = c.LibpqURL(adminUser, c.AdminPassword, c.PostgresDB)
 	}
 
-	// One connection answers both questions. A database we cannot open simply
-	// holds no import — the server itself is already known reachable — but the
-	// reason is logged, because the fallback from here is the import branch.
+	// A database we cannot open holds no import (the server itself is
+	// reachable), but the reason is logged because the fallback is the import.
 	var complete, hasData bool
 	if conn, err := pgx.Connect(ctx, targetURL); err == nil {
 		complete = importComplete(ctx, conn, c.PostgresDB)
@@ -171,19 +157,16 @@ func ensureImported(ctx context.Context, c *Config, r *Runner) error {
 	}
 
 	if hasData && !c.AllowDropExistingDB {
-		// Either a database imported by an older release of this image, or an
-		// import that died part-way through. Nominatim's own validator is the
-		// authority on which — the previous file marker could not tell them
-		// apart, and an unfinished import would be served as if it were done.
+		// Tables without a completion marker: an import that died part-way, or
+		// a database imported elsewhere. Nominatim's validator decides which.
 		Logf("database %q holds Nominatim tables but no completion marker; validating", c.PostgresDB)
 		if err := r.Run(ctx, "nominatim", "admin", "--check-database", "--project-dir", c.ProjectDir); err != nil {
 			return fmt.Errorf("database %q contains an incomplete or invalid Nominatim schema: %w\n"+
 				"Set ALLOW_DROP_EXISTING_DB=true to discard it and import again", c.PostgresDB, err)
 		}
 		Logf("validation passed; adopting the existing import")
-		// Stamped with the same credentials the probe used: on the adoption
-		// path the database was not created here, so its owner is unknown and
-		// COMMENT ON DATABASE may need the admin connection.
+		// The adopted database was not created here, so COMMENT ON DATABASE
+		// may need the admin connection.
 		if err := recordImport(ctx, targetURL, c.PostgresDB); err != nil {
 			return err
 		}
@@ -194,12 +177,11 @@ func ensureImported(ctx context.Context, c *Config, r *Runner) error {
 	if err := RunImport(ctx, c, r); err != nil {
 		return err
 	}
-	// Written only after the import has fully succeeded, so an interrupted run
-	// is retried rather than served.
+	// Recorded only after full success, so an interrupted run is retried.
 	return recordImport(ctx, c.LibpqURL("nominatim", c.NominatimPassword, c.PostgresDB), c.PostgresDB)
 }
 
-// recordImport stamps the completion marker. COMMENT ON DATABASE needs
+// recordImport stamps the completion marker; COMMENT ON DATABASE needs
 // ownership, so the caller chooses which role connects.
 func recordImport(ctx context.Context, url, dbname string) error {
 	conn, err := pgx.Connect(ctx, url)
@@ -217,8 +199,8 @@ func startReplication(ctx context.Context, c *Config, r *Runner) (*exec.Cmd, err
 		return nil, nil
 	}
 	// nominatim replication shells out to osm2pgsql for every diff, which the
-	// serve-only image does not ship. An explicit UPDATE_MODE is a promise this
-	// image cannot keep, so it fails rather than silently serving stale data.
+	// serve-only image does not ship. An explicit UPDATE_MODE is a promise
+	// this image cannot keep, so it fails rather than serving stale data.
 	if !HaveImportTools() {
 		if c.UpdateMode != "" {
 			return nil, fmt.Errorf("UPDATE_MODE=%q needs osm2pgsql, which the serve-only image does not ship; run replication from the full image", c.UpdateMode)
@@ -231,9 +213,8 @@ func startReplication(ctx context.Context, c *Config, r *Runner) (*exec.Cmd, err
 		Logf("WARNING: REPLICATION_URL unreachable; skipping replication")
 		return nil, nil
 	}
-	// Re-init on every start in case the replication settings changed. This also
-	// leaves the state usable by a manual `nominatim replication --once` even
-	// when no UPDATE_MODE is configured, which is what the shell version did.
+	// Re-init on every start in case the replication settings changed; this
+	// also keeps the state usable for a manual `nominatim replication --once`.
 	if err := r.Run(ctx, "nominatim", "replication", "--init", "--project-dir", c.ProjectDir); err != nil {
 		return nil, err
 	}
@@ -254,19 +235,13 @@ func startReplication(ctx context.Context, c *Config, r *Runner) (*exec.Cmd, err
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("starting replication: %w", err)
 	}
-	// Reaped here rather than left to accumulate: with UPDATE_MODE=once the
-	// process exits early, and nothing else would ever wait on it.
+	// Reaped here: with UPDATE_MODE=once nothing else would ever wait on it.
 	go func() { _ = cmd.Wait() }()
 	return cmd, nil
 }
 
-// runGunicorn starts the API in the foreground and supervises it.
-//
-// The shell version used --daemon plus a PID-file poll. That returned success
-// before the socket was bound (so a startup failure hung the container
-// forever), added up to five seconds of shutdown latency, could read a stale
-// PID left in /tmp by a previous run, and finished with an unconditional
-// `exit 0` that reported a crashed API as a clean exit to the orchestrator.
+// runGunicorn starts the API in the foreground and supervises it, so a crash
+// exits non-zero while a signalled stop exits clean.
 func runGunicorn(ctx context.Context, c *Config, r *Runner, replication *exec.Cmd) error {
 	args := []string{
 		"--bind", c.GunicornBind,
@@ -276,8 +251,8 @@ func runGunicorn(ctx context.Context, c *Config, r *Runner, replication *exec.Cm
 		"--access-logfile", "-",
 		"--error-logfile", "-",
 		"--enable-stdio-inheritance",
-		// Bounded request handling: without these a single slow or oversized
-		// client can hold a worker indefinitely, and the process never recycles.
+		// Bounded request handling: a slow or oversized client must not hold a
+		// worker forever, and workers recycle periodically.
 		"--timeout", envOr("GUNICORN_TIMEOUT", "60"),
 		"--graceful-timeout", envOr("GUNICORN_GRACEFUL_TIMEOUT", "30"),
 		"--keep-alive", "5",
@@ -289,8 +264,8 @@ func runGunicorn(ctx context.Context, c *Config, r *Runner, replication *exec.Cm
 		"nominatim_api.server.falcon.server:run_wsgi()",
 	}
 
-	// The API only ever reads. Giving it the read-only web role means a flaw in
-	// the request path cannot write to, or escalate on, the database.
+	// The API only reads, so it runs as the read-only web role: a flaw in the
+	// request path cannot write to, or escalate on, the database.
 	api := r.WithEnv(
 		"NOMINATIM_DATABASE_DSN="+c.DSN(c.WebUser, c.WebUserPassword),
 		"NOMINATIM_QUERY_TIMEOUT="+envOr("NOMINATIM_QUERY_TIMEOUT", "10"),
@@ -304,8 +279,8 @@ func runGunicorn(ctx context.Context, c *Config, r *Runner, replication *exec.Cm
 	}
 	Logf("--> Nominatim is ready to accept requests")
 
-	// Runner.Command sets Cancel/WaitDelay, so cancelling the context sends
-	// SIGTERM and escalates to SIGKILL if the drain deadline passes.
+	// Runner.Command sets Cancel/WaitDelay: cancellation sends SIGTERM and
+	// escalates to SIGKILL after the drain deadline.
 	err := cmd.Wait()
 	stopReplication(replication)
 
@@ -326,8 +301,7 @@ func stopReplication(cmd *exec.Cmd) {
 	_ = cmd.Process.Signal(syscall.SIGTERM)
 }
 
-// Healthcheck probes the local API. Implemented in-process so the image needs
-// no curl for its HEALTHCHECK.
+// Healthcheck probes the local API in-process, so the image needs no curl.
 func Healthcheck(bind string) error {
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Get("http://" + bind + "/status.php?format=json")

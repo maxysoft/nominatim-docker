@@ -11,9 +11,8 @@ import (
 	"strings"
 )
 
-// Dataset is one optional supplementary dataset Nominatim can consume during
-// import. The env var is dual-typed for backwards compatibility with the shell
-// implementation: "true" downloads the file, an existing path links it.
+// Dataset is one optional supplementary dataset. The env var is dual-typed:
+// "true" downloads the file from the mirror, an absolute path links it.
 type Dataset struct {
 	EnvVar string
 	Remote string // file name on the mirror
@@ -21,7 +20,7 @@ type Dataset struct {
 	Label  string
 }
 
-// Datasets is the full set, in the order the shell implementation fetched them.
+// Datasets is the full set of supplementary datasets.
 var Datasets = []Dataset{
 	{"IMPORT_WIKIPEDIA", "wikimedia-importance.csv.gz", "wikimedia-importance.csv.gz", "Wikipedia importance"},
 	{"IMPORT_SECONDARY_WIKIPEDIA", "wikimedia-secondary-importance.sql.gz", "secondary_importance.sql.gz", "Wikipedia secondary importance"},
@@ -30,20 +29,18 @@ var Datasets = []Dataset{
 	{"IMPORT_TIGER_ADDRESSES", "tiger2024-nominatim-preprocessed.csv.tar.gz", "tiger-nominatim-preprocessed.csv.tar.gz", "Tiger addresses"},
 }
 
-// Config is the fully resolved runtime configuration. Every field is derived
-// once, at startup, from the environment; nothing else reads os.Getenv.
+// Config is the fully resolved runtime configuration, derived once at startup
+// from the environment; nothing else reads os.Getenv.
 type Config struct {
 	ProjectDir string
 	UserAgent  string
 	Debug      bool
 
-	// Data source. Exactly one of PBFURL / PBFPath must be set when an import
-	// is required.
+	// Data source: exactly one of PBFURL / PBFPath when an import runs.
 	PBFURL  string
 	PBFPath string
 
-	// Supplementary datasets, keyed by env var name. The value is the raw
-	// operator-supplied string ("true", a path, or "").
+	// Raw operator values ("true", a path, or ""), keyed by env var name.
 	DatasetValues map[string]string
 
 	MirrorBaseURL string
@@ -56,8 +53,8 @@ type Config struct {
 	NominatimPassword string
 	AdminPassword     string
 	WebUser           string
-	// WebUserPassword is separate so that leaking the API's DSN does not also
-	// hand over the CREATEDB application role.
+	// Separate so that leaking the API's DSN does not also hand over the
+	// CREATEDB application role.
 	WebUserPassword string
 
 	// Import behaviour.
@@ -67,13 +64,11 @@ type Config struct {
 	Threads             int
 	AllowDropExistingDB bool
 
-	// RoleOptions are the CREATE ROLE attributes for the application role.
-	// CREATEDB is everything the import needs once PostGIS is pre-installed;
-	// set NOMINATIM_ROLE_OPTIONS=SUPERUSER to restore the previous behaviour.
+	// RoleOptions are the CREATE ROLE attributes for the application role;
+	// CREATEDB suffices once PostGIS is pre-installed.
 	RoleOptions string
-	// ProvisionExtensions installs PostGIS and hstore into template1 so the
-	// unprivileged application role inherits them in the database it creates.
-	// Turn it off when a managed provider installs extensions for you.
+	// ProvisionExtensions installs PostGIS/hstore into template1 so the
+	// unprivileged role inherits them. Off when a managed provider does it.
 	ProvisionExtensions bool
 
 	// Replication.
@@ -87,16 +82,11 @@ type Config struct {
 	GunicornWorkers int
 	WarmupOnStartup bool
 
-	// FixVolumeOwnership recursively takes ownership of the project directory,
-	// for migrating a volume written by the pre-refactor image.
-	FixVolumeOwnership bool
-
 	// Derived paths.
 	FlatnodeFile string
 }
 
-// adminUser is the bootstrap superuser. Every PostgreSQL deployment this image
-// targets calls it "postgres".
+// adminUser is the bootstrap superuser.
 const adminUser = "postgres"
 
 const (
@@ -132,7 +122,6 @@ func Load() (*Config, error) {
 		UpdateMode:                 os.Getenv("UPDATE_MODE"),
 		GunicornBind:               envOr("GUNICORN_BIND", "0.0.0.0:8080"),
 		WarmupOnStartup:            envBool("WARMUP_ON_STARTUP"),
-		FixVolumeOwnership:         envBool("FIX_VOLUME_OWNERSHIP"),
 	}
 
 	for _, d := range Datasets {
@@ -153,13 +142,12 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	if c.WebUserPassword == "" {
-		// Backwards compatible: one password still works, but the roles are
-		// only really separated when the web role has its own.
+		// One password still works; the roles are only really separated when
+		// the web role has its own.
 		c.WebUserPassword = c.NominatimPassword
 	}
 
-	// Threads and worker count default to the CPU allowance actually granted to
-	// this container, not to the host core count.
+	// Sized from the CPU allowance actually granted to this container.
 	cpus := availableCPUs()
 	if c.Threads, err = envInt("THREADS", cpus); err != nil {
 		return nil, err
@@ -168,8 +156,7 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 
-	// The replication intervals are only meaningful alongside a replication URL.
-	// Preserve the shell implementation's hard failure on that combination.
+	// Intervals are only meaningful alongside a replication URL.
 	if raw := os.Getenv("REPLICATION_UPDATE_INTERVAL"); raw != "" {
 		if c.ReplicationUpdateInterval, err = parseInterval("REPLICATION_UPDATE_INTERVAL", raw, c.ReplicationURL); err != nil {
 			return nil, err
@@ -181,8 +168,7 @@ func Load() (*Config, error) {
 		}
 	}
 
-	// A flatnode directory mounted into the project dir opts the import into
-	// flatnode storage, matching the previous behaviour.
+	// A mounted flatnode directory opts the import into flatnode storage.
 	flatnodeDir := filepath.Join(c.ProjectDir, "flatnode")
 	if fi, statErr := os.Stat(flatnodeDir); statErr == nil && fi.IsDir() {
 		c.FlatnodeFile = filepath.Join(flatnodeDir, "flatnode.file")
@@ -203,9 +189,8 @@ func parseInterval(name, raw, replicationURL string) (int, error) {
 }
 
 // Validate reports configuration that cannot produce a working container.
-// Checks that only matter when an import will actually run live in
-// ValidateForImport instead, so that a restart of an already-imported database
-// does not require the original PBF settings to still be present.
+// Import-only checks live in ValidateForImport, so a restart of an
+// already-imported database does not require the original PBF settings.
 func (c *Config) Validate() error {
 	if c.ProjectDir == "" {
 		return fmt.Errorf("PROJECT_DIR must not be empty")
@@ -216,8 +201,8 @@ func (c *Config) Validate() error {
 	if c.NominatimPassword == "" {
 		return fmt.Errorf("NOMINATIM_PASSWORD must be set (no default is shipped; use NOMINATIM_PASSWORD_FILE for a secret file)")
 	}
-	// Nominatim parses its own pgsql: DSN by splitting fields on ';' and each
-	// field on '=', so either character silently corrupts the connection string.
+	// Nominatim splits its DSN on ';' and each field on '=', so either
+	// character silently corrupts the connection string.
 	for name, pw := range map[string]string{"NOMINATIM_PASSWORD": c.NominatimPassword, "NOMINATIM_WEBUSER_PASSWORD": c.WebUserPassword} {
 		if strings.ContainsAny(pw, ";=") {
 			return fmt.Errorf("%s must not contain ';' or '=' (both are field separators in the Nominatim DSN)", name)
@@ -260,8 +245,7 @@ func (c *Config) Validate() error {
 	return nil
 }
 
-// ValidateForImport adds the checks that only apply when a fresh import is
-// about to run.
+// ValidateForImport adds the checks that only apply when a fresh import runs.
 func (c *Config) ValidateForImport() error {
 	switch {
 	case c.PBFURL == "" && c.PBFPath == "":
@@ -303,15 +287,12 @@ func (c *Config) DSN(user, password string) string {
 		c.PostgresHost, c.PostgresPort, user, password, c.PostgresDB, c.PostgresSSLMode)
 }
 
-// LibpqURL builds a URL the pgx driver understands. database may be empty to
-// connect to the maintenance database.
+// LibpqURL builds a URL for the pgx driver; database may be empty for the
+// maintenance database.
 //
-// The password is SASLprep'd here because three implementations disagree on how
-// to normalise it: PostgreSQL uses RFC 4013 SASLprep (NFKC, ignorables removed),
-// pgx uses precis.OpaqueString (NFC, ignorables rejected), and the verifier this
-// package stores uses RFC 4013. Handing pgx an already-prepared password makes
-// its own pass a no-op, so all three agree. Nominatim keeps the raw password in
-// its DSN — libpq applies RFC 4013 itself.
+// The password is SASLprep'd here so all three normalisers agree: PostgreSQL
+// and the stored verifier use RFC 4013, while pgx uses precis.OpaqueString —
+// handing pgx an already-prepared password makes its own pass a no-op.
 func (c *Config) LibpqURL(user, password, database string) string {
 	if database == "" {
 		database = "postgres"
@@ -342,9 +323,8 @@ func envInt(name string, def int) (int, error) {
 	return n, nil
 }
 
-// envSecret reads NAME, or the contents of the file named by NAME_FILE. The
-// file form keeps secrets out of `docker inspect` and the process environment
-// of every child.
+// envSecret reads NAME, or the contents of the file named by NAME_FILE, which
+// keeps secrets out of `docker inspect` and child process environments.
 func envSecret(name string) (string, error) {
 	if p := os.Getenv(name + "_FILE"); p != "" {
 		b, err := os.ReadFile(p)
@@ -356,20 +336,14 @@ func envSecret(name string) (string, error) {
 	return os.Getenv(name), nil
 }
 
-// availableCPUs returns the number of CPUs this container may actually use.
-//
-// runtime.NumCPU (like nproc) honours the CPU affinity mask but is blind to the
-// CFS quota, so `--cpus=2` on a 64-core host reports 64. Sizing osm2pgsql
-// threads and Gunicorn workers off that number oversubscribes the container and
-// exhausts the database connection limit.
-//
-// cgroup v2 only: every kernel that can run this image exposes cpu.max.
+// availableCPUs returns the CPUs this container may actually use.
+// runtime.NumCPU honours the affinity mask but not the CFS quota, so
+// `--cpus=2` on a 64-core host would otherwise oversubscribe the container
+// and exhaust the database connection limit. cgroup v2 only.
 func availableCPUs() int {
 	n := runtime.NumCPU()
 	b, err := os.ReadFile("/sys/fs/cgroup/cpu.max")
 	if err != nil {
-		// cgroup v1 host: the quota lives elsewhere and is not read. Say so,
-		// because a --cpus limit will otherwise be silently oversubscribed.
 		Logf("note: no cgroup v2 cpu.max; sizing from %d host CPUs. "+
 			"Set THREADS and GUNICORN_WORKERS explicitly if this container is CPU-limited.", n)
 		return n
@@ -383,7 +357,7 @@ func availableCPUs() int {
 	return n
 }
 
-// parseCPUMax reads "<quota> <period>", or "max <period>" when unlimited, and
+// parseCPUMax reads "<quota> <period>" ("max <period>" when unlimited) and
 // returns the quota rounded up to whole CPUs.
 func parseCPUMax(s string) int {
 	f := strings.Fields(strings.TrimSpace(s))
@@ -398,14 +372,8 @@ func parseCPUMax(s string) int {
 	return int(math.Ceil(float64(quota) / float64(period)))
 }
 
-// RenderEnvFile builds the contents of the Nominatim project .env.
-//
-// The file is regenerated in full on every start rather than patched in place.
-// The previous implementation substituted __PLACEHOLDER__ tokens with sed, which
-// consumed the placeholders on the first run: on a persisted volume every later
-// start silently ignored POSTGRES_HOST, NOMINATIM_PASSWORD, IMPORT_STYLE and the
-// replication intervals. Regenerating is idempotent by construction, so the
-// container's configuration always matches its environment.
+// RenderEnvFile builds the Nominatim project .env, regenerated in full on
+// every start so the configuration always matches the environment.
 func RenderEnvFile(c *Config) string {
 	kv := map[string]string{
 		"NOMINATIM_TOKENIZER":                    "icu",
@@ -435,17 +403,14 @@ func RenderEnvFile(c *Config) string {
 	return b.String()
 }
 
-// WriteEnvFile renders and writes the project .env with owner-only permissions.
-// The file holds a database password in cleartext, so 0600 matters: with the
-// old 0644 any process in the container — including a compromised Gunicorn
-// worker — could read it, and on a bind mount so could every host user.
+// WriteEnvFile renders and writes the project .env with owner-only
+// permissions: it holds a cleartext database password.
 func WriteEnvFile(c *Config, uid, gid int) error {
 	path := c.EnvFilePath()
 	if err := os.WriteFile(path, []byte(RenderEnvFile(c)), 0o600); err != nil {
 		return fmt.Errorf("writing %s: %w", path, err)
 	}
-	// WriteFile applies its mode only when creating, so a volume carrying a
-	// 0644 .env from an older image would keep it.
+	// WriteFile applies its mode only on create; correct a pre-existing file.
 	if err := os.Chmod(path, 0o600); err != nil {
 		return fmt.Errorf("chmod %s: %w", path, err)
 	}
