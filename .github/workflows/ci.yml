@@ -649,8 +649,9 @@ jobs:
     name: Publish docker image
     needs: test
     runs-on: ubuntu-latest
-    # Only run on push to master branch
-    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    # master publishes the real tags; the test branch publishes the same
+    # images with a -test suffix for pre-merge validation.
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/test')
     permissions:
       contents: read
       packages: write
@@ -665,6 +666,16 @@ jobs:
       - name: Get commit short reference
         id: get_commit
         run: echo "SHORT_SHA=${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
+
+      - name: Compute tag suffix
+        id: get_suffix
+        # -test on the test branch, empty on master.
+        run: |
+          if [ "$GITHUB_REF_NAME" = "test" ]; then
+            echo "TAG_SUFFIX=-test" >> "$GITHUB_OUTPUT"
+          else
+            echo "TAG_SUFFIX=" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Extract Nominatim Version
         id: get_version
@@ -702,8 +713,8 @@ jobs:
           provenance: mode=max
           sbom: true
           tags: |
-            ${{ github.repository }}:v${{ steps.get_version.outputs.NOMINATIM_VERSION }}-${{ steps.get_commit.outputs.SHORT_SHA }}
-            ${{ github.repository }}:latest
+            ${{ github.repository }}:v${{ steps.get_version.outputs.NOMINATIM_VERSION }}-${{ steps.get_commit.outputs.SHORT_SHA }}${{ steps.get_suffix.outputs.TAG_SUFFIX }}
+            ${{ github.repository }}:latest${{ steps.get_suffix.outputs.TAG_SUFFIX }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
@@ -721,8 +732,8 @@ jobs:
           provenance: mode=max
           sbom: true
           tags: |
-            ${{ github.repository }}:v${{ steps.get_version.outputs.NOMINATIM_VERSION }}-${{ steps.get_commit.outputs.SHORT_SHA }}-serve
-            ${{ github.repository }}:serve
+            ${{ github.repository }}:v${{ steps.get_version.outputs.NOMINATIM_VERSION }}-${{ steps.get_commit.outputs.SHORT_SHA }}-serve${{ steps.get_suffix.outputs.TAG_SUFFIX }}
+            ${{ github.repository }}:serve${{ steps.get_suffix.outputs.TAG_SUFFIX }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
@@ -738,8 +749,8 @@ jobs:
           provenance: mode=max
           sbom: true
           tags: |
-            ghcr.io/${{ github.repository }}:v${{ steps.get_version.outputs.NOMINATIM_VERSION }}-${{ steps.get_commit.outputs.SHORT_SHA }}
-            ghcr.io/${{ github.repository }}:latest
+            ghcr.io/${{ github.repository }}:v${{ steps.get_version.outputs.NOMINATIM_VERSION }}-${{ steps.get_commit.outputs.SHORT_SHA }}${{ steps.get_suffix.outputs.TAG_SUFFIX }}
+            ghcr.io/${{ github.repository }}:latest${{ steps.get_suffix.outputs.TAG_SUFFIX }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
@@ -756,8 +767,8 @@ jobs:
           provenance: mode=max
           sbom: true
           tags: |
-            ghcr.io/${{ github.repository }}:v${{ steps.get_version.outputs.NOMINATIM_VERSION }}-${{ steps.get_commit.outputs.SHORT_SHA }}-serve
-            ghcr.io/${{ github.repository }}:serve
+            ghcr.io/${{ github.repository }}:v${{ steps.get_version.outputs.NOMINATIM_VERSION }}-${{ steps.get_commit.outputs.SHORT_SHA }}-serve${{ steps.get_suffix.outputs.TAG_SUFFIX }}
+            ghcr.io/${{ github.repository }}:serve${{ steps.get_suffix.outputs.TAG_SUFFIX }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
