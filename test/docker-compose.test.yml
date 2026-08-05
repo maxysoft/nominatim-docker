@@ -1,5 +1,5 @@
 # Local integration stack. Driven by test/integration.sh, not meant for
-# production use — see contrib/ for deployment examples.
+# production use. See contrib/ for deployment examples.
 name: nominatim-itest
 
 services:

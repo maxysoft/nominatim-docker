@@ -13,7 +13,7 @@ ARG NOMINATIM_GID=1000
 
 
 # ---------------------------------------------------------------------------
-# Stage 1 — the entrypoint binary.
+# Stage 1: the entrypoint binary.
 # ---------------------------------------------------------------------------
 FROM ${GO_IMAGE} AS go-build
 
@@ -29,7 +29,7 @@ RUN --mount=type=cache,target=/go/pkg/mod,sharing=locked \
 
 
 # ---------------------------------------------------------------------------
-# Stage 2 — the Python environment, built as a venv so it copies as one
+# Stage 2: the Python environment, built as a venv so it copies as one
 # directory. --system-site-packages pulls PyICU from Debian's python3-icu: it
 # ships no wheel, and compiling it under QEMU on the arm64 leg is why no
 # compiler is installed here at all.
@@ -58,7 +58,7 @@ RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
 
 
 # ---------------------------------------------------------------------------
-# Stage 3 — serve: what the long-running API container needs, nothing more.
+# Stage 3, serve: what the long-running API container needs, nothing more.
 # osm2pgsql and postgresql-client live only in the full image (next stage);
 # the entrypoint refuses to import or replicate without them.
 # Build with --target serve; published as the -serve tags.
@@ -130,7 +130,7 @@ CMD ["serve"]
 
 
 # ---------------------------------------------------------------------------
-# Stage 4 — full (the default image): serve plus the import and replication
+# Stage 4, full (the default image): serve plus the import and replication
 # tooling. `nominatim import` runs osm2pgsql, and `nominatim replication`
 # shells out to it for every diff, so both capabilities live here.
 # ---------------------------------------------------------------------------

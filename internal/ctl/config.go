@@ -291,8 +291,8 @@ func (c *Config) DSN(user, password string) string {
 // maintenance database.
 //
 // The password is SASLprep'd here so all three normalisers agree: PostgreSQL
-// and the stored verifier use RFC 4013, while pgx uses precis.OpaqueString —
-// handing pgx an already-prepared password makes its own pass a no-op.
+// and the stored verifier use RFC 4013, while pgx uses precis.OpaqueString.
+// Handing pgx an already-prepared password makes its own pass a no-op.
 func (c *Config) LibpqURL(user, password, database string) string {
 	if database == "" {
 		database = "postgres"

@@ -60,7 +60,7 @@ Other places at Geofabrik follow the pattern `https://download.geofabrik.de/$CON
 
 - `REPLICATION_UPDATE_INTERVAL`: How often upstream publishes diffs (in seconds, default: `86400`). _Requires `REPLICATION_URL` to be set._
 - `REPLICATION_RECHECK_INTERVAL`: How long to sleep if no update found yet (in seconds, default: `900`). _Requires `REPLICATION_URL` to be set._
-- `UPDATE_MODE`: How to run replication to [update nominatim data](https://nominatim.org/release-docs/5.3/admin/Update/#updating-nominatim). Options: `continuous`/`once`/`catch-up` (default: unset — no automatic updates)
+- `UPDATE_MODE`: How to run replication to [update nominatim data](https://nominatim.org/release-docs/5.3/admin/Update/#updating-nominatim). Options: `continuous`/`once`/`catch-up` (default: unset, so no automatic updates run)
 - `FREEZE`: Freeze database and disable dynamic updates to save space. (default: `false`)
 - `REVERSE_ONLY`: If you only want to use the Nominatim database for reverse lookups. (default: `false`)
 - `IMPORT_WIKIPEDIA`: Whether to download and import the Wikipedia importance dumps (`true`) or path to importance dump in the container. Importance dumps improve the scoring of results. On a beefy 10-core server, this takes around 5 minutes. (default: `false`)
@@ -68,9 +68,9 @@ Other places at Geofabrik follow the pattern `https://download.geofabrik.de/$CON
 - `IMPORT_US_POSTCODES`: Whether to download and import the US postcode dump (`true`) or path to US postcode dump in the container. (default: `false`)
 - `IMPORT_GB_POSTCODES`: Whether to download and import the GB postcode dump (`true`) or path to GB postcode dump in the container. (default: `false`)
 - `IMPORT_TIGER_ADDRESSES`: Whether to download and import the Tiger address data (`true`) or path to a preprocessed Tiger address set in the container. (default: `false`)
-- `THREADS`: How many threads should be used to import (default: the container's CPU allowance — the cgroup CPU quota when one is set, otherwise all cores)
+- `THREADS`: How many threads should be used to import (default: the container's CPU allowance, which is the cgroup CPU quota when one is set and all cores otherwise)
 - `GUNICORN_WORKERS`: Specifies how many Gunicorn worker processes should handle API requests. If not explicitly set, it defaults to the container's CPU allowance (same rule as `THREADS`). Increase this value to improve concurrent request handling capacity, but ensure it aligns with your server's CPU resources.
-- `NOMINATIM_PASSWORD`: Password for the `nominatim` and `www-data` database roles. **Required — there is no default.**
+- `NOMINATIM_PASSWORD`: Password for the `nominatim` and `www-data` database roles. **Required. There is no default.**
   Use `NOMINATIM_PASSWORD_FILE` to read it from a secret file instead. Must not contain `;`.
 - `POSTGRES_ADMIN_PASSWORD`: Password for the PostgreSQL superuser. **Required for the initial import**,
   used only to create roles and install PostGIS. Also supports a `_FILE` variant.
@@ -89,7 +89,7 @@ This version requires an external PostgreSQL database with PostGIS extension. Th
 - `POSTGRES_PORT` (default: `5432`): Port number of the PostgreSQL server
 - `POSTGRES_DB` (default: `nominatim`): Name of the database to use
 - `NOMINATIM_PASSWORD`: Password for the Nominatim database users
-- `POSTGRES_ADMIN_PASSWORD`: Password for the PostgreSQL superuser — required for the initial import, never derived from `NOMINATIM_PASSWORD`
+- `POSTGRES_ADMIN_PASSWORD`: Password for the PostgreSQL superuser. Required for the initial import, never derived from `NOMINATIM_PASSWORD`
 
 For PostgreSQL tuning, configure your external PostgreSQL server according to the [official Nominatim documentation](https://nominatim.org/release-docs/5.3/admin/Installation/#tuning-the-postgresql-database).
 

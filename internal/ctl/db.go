@@ -129,7 +129,7 @@ func dropDatabase(ctx context.Context, conn *pgx.Conn, dbname string, hasData, a
 			"Refusing to drop it. Set ALLOW_DROP_EXISTING_DB=true to overwrite, or point POSTGRES_DB at a different database", dbname)
 	}
 	if hasData {
-		Logf("WARNING: ALLOW_DROP_EXISTING_DB=true — dropping populated database %q", dbname)
+		Logf("WARNING: ALLOW_DROP_EXISTING_DB=true, dropping populated database %q", dbname)
 	}
 	// FORCE terminates connections left by a previous container; PostgreSQL 13+.
 	force := false
@@ -156,7 +156,7 @@ func dropDatabaseSQL(dbname string, force bool) string {
 // provisionExtensions installs the extensions Nominatim requires into the
 // connected database (template1): PostGIS is untrusted, so CREATE EXTENSION
 // needs superuser, and template1 is the only way to hand the extensions to an
-// unprivileged role — Nominatim's own createdb fails on an existing database.
+// unprivileged role, because Nominatim's own createdb fails on an existing database.
 func provisionExtensions(ctx context.Context, conn *pgx.Conn) error {
 	// Must match what nominatim_db's setup_database_skeleton creates.
 	var missing []string
@@ -244,7 +244,7 @@ func mustNotBeEmpty(field, value string) error {
 const scramIterations = 4096
 
 // scramVerifier builds the value PostgreSQL stores in pg_authid.rolpassword,
-// so the cleartext password never reaches the server — where log_statement
+// so the cleartext password never reaches the server, where log_statement
 // would record it verbatim. Format per RFC 5802 with PostgreSQL's encoding.
 func scramVerifier(password string, salt []byte, iterations int) (string, error) {
 	saltedPassword, err := pbkdf2.Key(sha256.New, password, salt, iterations, sha256.Size)

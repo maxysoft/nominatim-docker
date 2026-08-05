@@ -1,7 +1,7 @@
 # Refactor: shell entrypoint → `nominatim-ctl`
 
 This branch replaces the three shell scripts that drove the container
-(`config.sh`, `init.sh`, `start.sh` — 439 lines) with a single static Go binary,
+(`config.sh`, `init.sh`, `start.sh`, 439 lines between them) with a single static Go binary,
 and rebuilds the image around it. Nominatim itself is unchanged: it is a Python
 application and stays one.
 
@@ -39,7 +39,7 @@ rendered from scratch on every boot:
   while the data lived in the *database* volume. Removing or renaming the
   application volume dropped a fully populated database with no prompt.
 
-A bind-mounted `PROJECT_DIR` — the documented planet deployment — made these
+A bind-mounted `PROJECT_DIR`, the documented planet deployment, made these
 compound: Docker never seeds a bind mount from the image, so `.env` did not
 exist, every `sed` failed against a missing file, `config.sh` exited 0 anyway,
 and the container silently fell back to Nominatim's built-in DSN pointing at a
@@ -53,7 +53,7 @@ local socket that does not exist in this image.
 | --- | --- | --- |
 | Configuration | 8 in-place `sed` substitutions on a persisted file | Struct → file, fully regenerated every boot, `0600` |
 | Import marker | File in a different volume from the data | A `COMMENT ON DATABASE` written only after the import succeeds |
-| Privilege drop | `sudo -E -u nominatim` (setuid-root binary in the image) | `SysProcAttr.Credential` — a direct fork+setuid, no setuid binary anywhere |
+| Privilege drop | `sudo -E -u nominatim` (setuid-root binary in the image) | `SysProcAttr.Credential`: a direct fork+setuid, no setuid binary anywhere |
 | Database access | 9 `psql -c "…${VAR}…"` string interpolations | `pgx` with bind parameters; quoted identifiers and literals where PostgreSQL forbids parameters |
 | Setting role passwords | `ALTER USER … PASSWORD '<cleartext>'`, logged verbatim by the server | Client-computed SCRAM-SHA-256 verifier; the password never leaves the entrypoint |
 | Log redaction | n/a (`set -x` echoed passwords) | Applied to the entrypoint's own output *and* to every child's, line by line |
@@ -65,21 +65,22 @@ local socket that does not exist in this image.
 | Failure modes | Three unbounded `until` loops with stderr discarded | Bounded retries that report the real driver error and exit non-zero |
 
 `config.sh` + `init.sh` + `start.sh` (439 lines of bash, ~20% of it duplicated
-verbatim between two files) become 2043 lines of Go — 3.5× more code —
-plus 53 test cases. The line count goes up substantially; what goes down is the
-number of ways to be silently wrong. That trade is the whole argument, and it is
+verbatim between two files) become 2043 lines of Go, 3.5× more code, plus 53
+test cases. The line count goes up substantially; what goes down is the number
+of ways to be silently wrong. That trade is the whole argument, and it is
 worth stating honestly rather than dressing up as a reduction.
 
 The code lives in seven files under `internal/ctl` plus `cmd/nominatim-ctl`.
-Roughly a quarter of it implements things the shell never did at all — the SCRAM
-verifier, log redaction, download retry, cgroup-aware sizing, the ownership
-check — so the like-for-like portion is nearer 1,500 lines.
+Roughly a quarter of it implements things the shell never did at all, including
+the SCRAM verifier, log redaction, download retry and cgroup-aware sizing, so
+the like-for-like portion is nearer 1,500 lines.
 
 **On reaping.** An earlier draft of this refactor ran a `Wait4(-1, WNOHANG)`
 reaper when PID 1. That is unsafe in Go: it races `exec.Cmd.Wait` for the exit
 status of the orchestrator's *own* children, and whichever call loses gets
 `ECHILD`. The visible symptom would be an intermittent "import failed" on an
-import that actually succeeded — strictly worse than the zombies it prevents.
+import that actually succeeded, which is strictly worse than the zombies it
+prevents.
 Reaping is therefore left to the container runtime; every compose file in
 `contrib/` sets `init: true`, and the entrypoint logs a note if it finds itself
 at PID 1 without one.
@@ -104,7 +105,7 @@ BuildKit's own linter flags `master` with
 
 Most of the reduction is one package. Debian's `osm2pgsql` ships
 `osm2pgsql-gen`, a vector-tile generalisation tool that Nominatim never invokes
-— it references only `osm2pgsql` — and that single binary depends on OpenCV,
+(it references only `osm2pgsql`), and that single binary depends on OpenCV,
 which pulls GDAL, which pulls Mesa, which pulls LLVM: about 195 MB installed
 that nothing in the geocoder links against. Purging it in the same layer as the
 install removes it for real; doing so in a later layer would only hide it. The
@@ -115,14 +116,14 @@ The rest comes from dropping `build-essential`, `python3-dev`, `libicu-dev`,
 image, and from replacing the `FROM scratch` + `COPY --from=build / /` layer
 collapse with a real multi-stage build. The collapse traded away the base
 image's `ENV` (including `LANG`), any `LABEL`/`HEALTHCHECK`, base-image
-provenance for scanners, and all layer sharing between versions — for a saving
+provenance for scanners, and all layer sharing between versions, for a saving
 that a normal multi-stage build exceeds anyway.
 
 ## Security changes
 
 Ordered by severity, using the identifiers from the audit that produced them.
 
-**C1 — a hardcoded password became a PostgreSQL superuser password.**
+**C1: a hardcoded password became a PostgreSQL superuser password.**
 `ENV NOMINATIM_PASSWORD=qaIACxO6wMR3` shipped in the image, was documented in
 three files, and is in git history. `init.sh` defaulted
 `POSTGRES_ADMIN_PASSWORD` to it and then ran
@@ -130,12 +131,12 @@ three files, and is in git history. `init.sh` defaulted
 default, and supports `NOMINATIM_PASSWORD_FILE`. The admin password is never
 derived from it.
 
-**C2 — the internet-facing API held a superuser connection.** Gunicorn read the
+**C2: the internet-facing API held a superuser connection.** Gunicorn read the
 project `.env`, whose DSN named the superuser role. Any flaw in `nominatim-api`
 escalated to full cluster compromise. The API now connects as the read-only
 `www-data` role that the previous code created, gave a password, and never used.
 The application role drops from `SUPERUSER` to `CREATEDB`. Installing PostGIS,
-`postgis_raster` and `hstore` — the only superuser-requiring step — is done by the
+`postgis_raster` and `hstore`, the only superuser-requiring step, is done by the
 administrative connection into `template1`. To be precise about what this buys:
 the superuser requirement is **relocated, not eliminated** (`POSTGRES_ADMIN_PASSWORD`
 is still needed for the initial import). The win is that no long-lived connection,
@@ -151,23 +152,23 @@ ignorables rejected), and the verifier written here uses RFC 4013 to match the
 server. A password containing, say, a soft hyphen therefore hashes to three
 different keys. The entrypoint hands pgx an already-prepared password so its own
 pass is a no-op, while Nominatim keeps the raw password in its DSN and lets libpq
-prepare it. All three then agree. This mismatch predates the rewrite — a pgx
-connection would have failed against any non-ASCII password — it was simply never
+prepare it. All three then agree. This mismatch predates the rewrite: a pgx
+connection would have failed against any non-ASCII password. It was simply never
 exercised. `test/integration.sh` now imports with one.
 
-**C3 — unauthenticated fetch of a SQL dump that is then executed.**
+**C3: unauthenticated fetch of a SQL dump that is then executed.**
 `StrictHostKeyChecking=no` removed the only authentication of the storage host,
 and `wikimedia-secondary-importance.sql.gz` is loaded into the database. Anyone
 able to spoof that host could execute arbitrary SQL as a superuser. All five
 datasets are now fetched over HTTPS from `https://nominatim.org/data` (verified
 reachable), with an optional per-dataset `*_SHA256`. `sshpass` and
-`openssh-client` are gone, along with the committed storage credentials — which
+`openssh-client` are gone, along with the committed storage credentials, which
 are in public git history and should be considered permanently burned.
 
-**C4 — unguarded `DROP DATABASE`.** Now refuses to drop a database containing
+**C4: unguarded `DROP DATABASE`.** Now refuses to drop a database containing
 `public.placex` unless `ALLOW_DROP_EXISTING_DB=true`.
 
-**C5 — SQL injection via `NOMINATIM_PASSWORD` and `POSTGRES_DB`.** A password
+**C5: SQL injection via `NOMINATIM_PASSWORD` and `POSTGRES_DB`.** A password
 containing `'` broke the statement; a crafted one executed as superuser. An
 unquoted `${POSTGRES_DB}` both folded case and allowed statement chaining. Both
 are quoted now, with unit tests covering the injection strings.
@@ -180,9 +181,9 @@ an explanation.
 
 **Also addressed:** TLS to the database is configurable via `POSTGRES_SSLMODE`
 (present in the DSN and every driver connection); secrets are redacted from
-everything the entrypoint itself logs, so `DEBUG_MODE` no longer echoes passwords
-— though child output (Gunicorn, osm2pgsql, Python tracebacks) passes through
-unfiltered; role passwords are set with a client-computed SCRAM-SHA-256 verifier
+everything the entrypoint itself logs, so `DEBUG_MODE` no longer echoes
+passwords, and child output (Gunicorn, osm2pgsql, Python tracebacks) is filtered
+line by line through the same masker; role passwords are set with a client-computed SCRAM-SHA-256 verifier
 rather than a cleartext `ALTER ROLE … PASSWORD`, so the password itself never
 reaches the server or its statement log; `.env` is chmod-ed to `0600` on every
 write, including one left at `0644` on a volume by an older image; the web role
@@ -221,7 +222,7 @@ are pinned to commit SHAs and the workflow has a least-privilege
 | `NOMINATIM_WEBUSER_PASSWORD` | falls back to `NOMINATIM_PASSWORD` | Separate password for the read-only API role |
 | `NOMINATIM_WEBUSER` | `www-data` | Read-only role name |
 
-**Removed:** `STORAGE_USER`, `STORAGE_HOST`, `STORAGE_PASSWORD` — superseded by
+**Removed:** `STORAGE_USER`, `STORAGE_HOST`, `STORAGE_PASSWORD`, superseded by
 `DATA_MIRROR_URL` now that the transport is HTTPS.
 
 ---
@@ -239,8 +240,8 @@ are pinned to commit SHAs and the workflow has a least-privilege
 4. **`.env` is regenerated on every start.** Hand edits to
    `$PROJECT_DIR/.env` will not survive. Use environment variables.
 5. **Import is detected from the database, not `import-finished`.** A container
-   pointed at a populated database will skip the import even on a fresh volume —
-   which is the fix for the data-loss path, but it does mean re-importing into
+   pointed at a populated database will skip the import even on a fresh volume.
+   That is the fix for the data-loss path, but it does mean re-importing into
    the same database now requires `ALLOW_DROP_EXISTING_DB=true`.
 6. **Dataset paths must be absolute.** `IMPORT_WIKIPEDIA=data/wiki.csv.gz`
    silently resolved against `/app` and was skipped; it is now rejected.
@@ -248,7 +249,7 @@ are pinned to commit SHAs and the workflow has a least-privilege
    silently. It now fails at startup.
 8. **A crashed Gunicorn exits non-zero.** The old code always exited 0, so
    orchestrators with `restartPolicy: OnFailure` never restarted a dead API.
-   A signalled shutdown still exits 0 at any point in the lifecycle — the handler
+   A signalled shutdown still exits 0 at any point in the lifecycle, because the handler
    is installed in `main` before any long-running work, so stopping the container
    mid-import is a clean exit rather than a crash.
 9. **The application role is no longer a superuser.** If your provider cannot
@@ -272,7 +273,7 @@ are pinned to commit SHAs and the workflow has a least-privilege
 ### Migrating an existing deployment
 
 ```bash
-# 1. Set the two passwords explicitly — there is no default any more.
+# 1. Set the two passwords explicitly. There is no default any more.
 cp contrib/.env.example contrib/.env && $EDITOR contrib/.env
 
 # 2. Downgrade the application role and install the extensions centrally.
@@ -300,22 +301,22 @@ make integration  # full local stack: import Monaco, assert behaviour
 ```
 
 `test/integration.sh` runs against a real PostGIS container. It covers the API
-surface and the regressions this refactor targets — **not** the whole CI matrix.
+surface and the regressions this refactor targets, but **not** the whole CI matrix.
 Not covered locally, and still only exercised in CI: `UPDATE_MODE=once`/
 `continuous`, `FREEZE`, `PBF_PATH`, the GB postcode import, `WARMUP_ON_STARTUP`,
 the dataset download path, the flatnode directory, `*_SHA256` verification, the
 role-adoption refusal, and the `ALLOW_DROP_EXISTING_DB` guard. The scenarios it
 does run:
 
-- `full` — import, then the search/reverse/lookup/details/status surface and
+- `full`: import, then the search/reverse/lookup/details/status surface and
   `nominatim admin --check-database`
-- `security` — the application role is not a superuser, the API is connected as
+- `security`: the application role is not a superuser, the API is connected as
   `www-data`, no setuid binaries, `sudo`/`sshpass`/`ssh`/`curl` absent, `.env` is
   `0600` and placeholder-free, Gunicorn runs unprivileged
-- `restart` — `placex` row count is unchanged across a restart
-- `volume_loss` — **removing the project volume does not drop the database**
-- `shutdown` — clean stop exits 0, promptly
-- `failfast` — misconfiguration exits non-zero with a diagnostic instead of
+- `restart`: `placex` row count is unchanged across a restart
+- `volume_loss`: **removing the project volume does not drop the database**
+- `shutdown`: clean stop exits 0, promptly
+- `failfast`: misconfiguration exits non-zero with a diagnostic instead of
   hanging
 
 Unit tests cover the pure logic where the shell bugs lived: SQL quoting against
@@ -330,7 +331,7 @@ Deliberately not addressed, listed so they are not mistaken for oversights:
 
 - **`PROVISION_EXTENSIONS` defaults to `true`.** Nominatim's setup shells out to
   `createdb`, which fails if the database already exists, so the extensions
-  cannot be installed into the target database beforehand — `template1` is the
+  cannot be installed into the target database beforehand, so `template1` is the
   only way to hand them to an unprivileged role. The blast radius is reduced as
   far as it can be: nothing is touched when the extensions are already present,
   the step is skipped entirely for a superuser role, and it is logged when it
@@ -357,7 +358,3 @@ Deliberately not addressed, listed so they are not mistaken for oversights:
   made it fail `docker compose config` on master, and `POSTGRES_HOST: postgres`,
   which named a service that does not exist in that file (it is
   `nominatim-postgres`), so the stack could parse and still never start.
-- The publish job still rebuilds the image rather than promoting the tested
-  artifact, because the test matrix builds `linux/amd64` only while publish
-  builds `amd64,arm64`. Provenance and SBOM attestation were added; closing the
-  gap properly needs a digest-based promotion step and is left as follow-up.

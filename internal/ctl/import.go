@@ -208,7 +208,7 @@ func warmCaches(ctx context.Context, c *Config, r *Runner) error {
 	return warm.Run(ctx, "nominatim", args...)
 }
 
-// cleanupDownloads removes exactly the files the import created — never a
+// cleanupDownloads removes exactly the files the import created, never a
 // glob, which could match operator files too.
 func cleanupDownloads(c *Config) {
 	Logf("removing downloaded dumps in %s", c.ProjectDir)

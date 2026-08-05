@@ -17,8 +17,8 @@ If Docker Hub secrets are not configured, images will only be pushed to GitHub C
 
 ### Image variants
 
-- **Full** (`latest`, `v<version>-<sha>`) — the default: import, replication and serving.
-- **Serve** (`serve`, `v<version>-<sha>-serve`) — API serving only; osm2pgsql and
+- **Full** (`latest`, `v<version>-<sha>`) is the default: import, replication and serving.
+- **Serve** (`serve`, `v<version>-<sha>-serve`) does API serving only. osm2pgsql and
   postgresql-client are not installed, so the image is smaller and the long-running exposed
   container has less attack surface. It refuses to run an import and rejects `UPDATE_MODE`:
   run the import (and any replication) with the full image against the same database, then

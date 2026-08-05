@@ -15,14 +15,14 @@ Keep in mind: the VCL canonicalizes query strings (so that cache keys match cano
 ## Concepts: `purge`, `ban`, and surrogate keys
 
 - `ban`: Varnish's built-in technique for marking cached objects invalid by a boolean expression (e.g. `ban req.url ~ "^/search"`). The object is not removed immediately from disk, but subsequent lookups skip banned objects; the backend object is re-fetched when needed.
-- HTTP `PURGE`: not a built-in Varnish management command — many deployments implement an HTTP endpoint or VCL handler that triggers a backend `ban` (or uses a VMOD that exposes a purge function).
+- HTTP `PURGE`: not a built-in Varnish management command. Many deployments implement an HTTP endpoint or VCL handler that triggers a backend `ban` (or uses a VMOD that exposes a purge function).
 - Surrogate key / Surrogate-Control: tag objects with identifiers (e.g. `Surrogate-Key: search:xyz`) and ban by key. This is efficient when you want to invalidate a group of objects (e.g., all objects for a particular resource id).
 
 Recommendation: Use `varnishadm ban` (or `varnishadm` called from a management script) for most invalidations, and adopt a Surrogate-Key tagging scheme to allow fine-grained invalidation by logical key.
 
 ---
 
-## 1) Purge (invalidate) a single URL — using varnishadm (preferred)
+## 1) Purge (invalidate) a single URL using varnishadm (preferred)
 
 1. Canonicalize the URL the same way VCL does. If you used std.querysort (or vmod-querystring) to sort query strings before hashing, you must pass the canonicalized form to the ban expression, or ban in a way that ignores parameter order.
 
@@ -77,7 +77,7 @@ Useful commands:
 
   varnishadm "ban.list"
 
-- Remove all bans (dangerous) — there is no single "clear bans" command; you can script inspection and reloading of the VCL to reset state or restart Varnish depending on needs. Usually you do not clear bans; you let them expire / be replaced.
+- Remove all bans (dangerous): there is no single "clear bans" command. You can script inspection and reloading of the VCL to reset state or restart Varnish depending on needs. Usually you do not clear bans; you let them expire / be replaced.
 
 ---
 

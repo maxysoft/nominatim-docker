@@ -285,7 +285,7 @@ scenario_serve_image() {
     bad "serve image did not refuse the import (rc=$rc): ${out:0:200}"
   fi
 
-  # And it must serve the import the full image created — on a read-only root
+  # And it must serve the import the full image created, on a read-only root
   # filesystem, which is how the shipped compose files run it. The project dir
   # is a named volume, not a tmpfs: volumes seed ownership from the image,
   # tmpfs mounts come up root-owned.

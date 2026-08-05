@@ -104,7 +104,7 @@ func TestScramVerifierIsDeterministicForAGivenSalt(t *testing.T) {
 }
 
 // The whole point: the cleartext password must not appear in the statement,
-// for any password — not only printable ASCII.
+// for any password, not only printable ASCII.
 func TestPasswordSecretHidesTheCleartext(t *testing.T) {
 	for _, pw := range []string{"s3cret-password", "pässwort", "naïve", "emoji🙂", "with space"} {
 		sql, err := passwordSecret(pw)

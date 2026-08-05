@@ -46,8 +46,8 @@ func BaseEnv(c *Config) []string {
 }
 
 // PrepareProjectDir creates the project directory, renders the configuration
-// into it, and takes ownership of NOMINATIM_HOME — under a read-only root
-// filesystem $HOME is a tmpfs mounted fresh, and root-owned, on every boot.
+// into it, and takes ownership of NOMINATIM_HOME. Under a read-only root
+// filesystem, $HOME is a tmpfs mounted fresh and root-owned on every boot.
 func PrepareProjectDir(c *Config, uid, gid int) error {
 	if err := os.MkdirAll(c.ProjectDir, 0o755); err != nil {
 		return err
@@ -118,7 +118,7 @@ func Serve(ctx context.Context, c *Config) error {
 }
 
 // ensureImported decides whether an import is required, and runs one if so.
-// The decision is made only after the server is known reachable — a booting
+// The decision is made only after the server is known reachable, because a booting
 // database must not be mistaken for an empty one on a routine restart.
 func ensureImported(ctx context.Context, c *Config, r *Runner) error {
 	haveAdmin := c.AdminPassword != ""
@@ -152,7 +152,7 @@ func ensureImported(ctx context.Context, c *Config, r *Runner) error {
 	}
 
 	if complete {
-		Logf("existing Nominatim import found in %q — skipping import", c.PostgresDB)
+		Logf("existing Nominatim import found in %q, skipping import", c.PostgresDB)
 		return chownProjectFiles(c, r.UID, r.GID)
 	}
 
@@ -173,7 +173,7 @@ func ensureImported(ctx context.Context, c *Config, r *Runner) error {
 		return chownProjectFiles(c, r.UID, r.GID)
 	}
 
-	Logf("no completed Nominatim import in %q — running import", c.PostgresDB)
+	Logf("no completed Nominatim import in %q, running import", c.PostgresDB)
 	if err := RunImport(ctx, c, r); err != nil {
 		return err
 	}

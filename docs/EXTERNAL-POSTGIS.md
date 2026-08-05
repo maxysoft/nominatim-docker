@@ -30,7 +30,7 @@ The following environment variables are used to configure the external database 
 - `POSTGRES_PORT`: Port number of the PostgreSQL server (default: `5432`)
 - `POSTGRES_DB`: Name of the database to use (default: `nominatim`)
 - `NOMINATIM_PASSWORD`: Password for the Nominatim database users
-- `POSTGRES_ADMIN_PASSWORD`: Password for the PostgreSQL superuser — required for the initial import, never derived from `NOMINATIM_PASSWORD`
+- `POSTGRES_ADMIN_PASSWORD`: Password for the PostgreSQL superuser. Required for the initial import, never derived from `NOMINATIM_PASSWORD`
 
 ### Optional Variables
 All other Nominatim configuration variables remain the same as in the original documentation.

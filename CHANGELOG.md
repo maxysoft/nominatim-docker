@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Releases
 
-### Unreleased — entrypoint rewritten in Go
+### Unreleased: entrypoint rewritten in Go
 
 Full rationale, parity matrix and migration steps: [docs/REFACTOR.md](docs/REFACTOR.md).
 
@@ -60,7 +60,7 @@ Follow-up hardening (closes the remaining documented gaps):
   rather than being compiled from an sdist. It has no wheel, so the arm64 publish leg was compiling
   a C++ extension under QEMU. Every other dependency is a wheel, so the build stage no longer
   installs a compiler at all.
-- **Docs:** Three previously undeclared behaviour changes are now in Breaking changes — a
+- **Docs:** Three previously undeclared behaviour changes are now in Breaking changes: a
   non-integer replication interval is a startup error, the new Gunicorn defaults, and the
   `template1` modification.
 - **Test:** An integration scenario imports with a non-ASCII password containing a soft hyphen and a
@@ -92,18 +92,18 @@ Fixes from an independent review of the refactor itself:
 - **Fixed:** `DEBUG_MODE` was parsed and never used; it now enables redacted verbose logging.
 - **Fixed:** `contrib/docker-compose-varnish.yml` pointed `POSTGRES_HOST` at a nonexistent service.
 - **Added:** `NOMINATIM_WEBUSER_PASSWORD`, so the read-only API role no longer shares the application
-  role's password. Reject `=` as well as `;` in passwords — both are Nominatim DSN separators.
+  role's password. Reject `=` as well as `;` in passwords, since both are Nominatim DSN separators.
 
 Serve/import split and immutable root filesystem:
 
 - **Added:** A slim `serve` build target (`docker build --target serve`), published as the `serve`
   and `v<version>-<sha>-serve` tags. It ships without osm2pgsql and postgresql-client, so the
   long-running exposed container is smaller and has less attack surface. It serves an existing
-  import and refuses — fast, with the remediation in the message — to run an import; an explicit
+  import and refuses to run an import, failing fast with the remediation in the message; an explicit
   `UPDATE_MODE` on it is a startup error rather than silently stale data.
 - **Changed:** Every shipped compose file now runs the container with `read_only: true`. Writes are
   confined to `/nominatim` (volume), `/tmp` and `$HOME` (tmpfs), and `/dev/shm`. The entrypoint
-  takes ownership of `$HOME` at startup, because a tmpfs is mounted fresh — and root-owned — on
+  takes ownership of `$HOME` at startup, because a tmpfs is mounted fresh, and root-owned, on
   every boot.
 - **Test:** A `serve_image` integration scenario builds the serve target, asserts osm2pgsql and psql
   are absent, asserts the fail-fast refusal against an empty database, and serves an existing import
@@ -111,7 +111,7 @@ Serve/import split and immutable root filesystem:
 
 Repository cleanup from an over-engineering audit:
 
-- **Removed:** `example.md` — it duplicated howto.md's configuration table, documented an invalid
+- **Removed:** `example.md`, which duplicated howto.md's configuration table, documented an invalid
   `UPDATE_MODE=none`, and its example ran the upstream `mediagis/nominatim` image.
 - **Removed:** The upstream contributors table and `.all-contributorsrc`; every entry pointed at
   `mediagis/nominatim-docker`. The credit is now a link to the upstream list.
@@ -131,7 +131,7 @@ Repository cleanup from an over-engineering audit:
   `managed by nominatim-docker` role comments, without which the entrypoint refuses to reconcile
   the roles it did not create.
 
-### v5.3.2 — 2026-04-22
+### v5.3.2 (2026-04-22)
 
 - **Changed:** Merge from upstream (mediagis/nominatim-docker) to sync docs and contributors
 - **Changed:** Bump nominatim version to 5.3.2
@@ -142,7 +142,7 @@ Repository cleanup from an over-engineering audit:
 - **Added:** New CI helper script `.github/workflows/assert-json-field` to assert specific JSON response fields (dot-path) against regexes with retries
 - **Test:** Enhanced CI "API endpoints coverage" scenario to validate status fields, search result fields (name/class/place_rank), addressdetails, polygon GeoJSON, reverse lookup, lookup/details by osmtype+osmid, and Content-Type header
 
-### v5.3.0 — 2026-04-04
+### v5.3.0 (2026-04-04)
 
 - **Changed:** Bump nominatim version to 5.3.0 and varnish image to 8.0.1
 - **Changed:** Replace ubuntu:24.04 base image with debian:13.4-slim pinned by digest via ARG BASE_IMAGE so the base can be overridden at build time

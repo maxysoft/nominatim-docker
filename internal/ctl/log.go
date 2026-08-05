@@ -47,7 +47,7 @@ func Errf(format string, args ...any) {
 
 // RedactWriter filters a child process's output through the secret masker,
 // line by line, so a traceback or driver error cannot echo a DSN into the
-// container log — even when a secret is split across Write calls.
+// container log, even when a secret is split across Write calls.
 type RedactWriter struct {
 	W io.Writer
 
