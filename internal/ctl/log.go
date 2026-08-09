@@ -60,12 +60,18 @@ func (r *RedactWriter) Write(p []byte) (int, error) {
 	defer r.mu.Unlock()
 	r.buf = append(r.buf, p...)
 	for {
-		i := bytes.IndexByte(r.buf, '\n')
+		// Both terminators count: osm2pgsql reports progress with bare '\r',
+		// so splitting on '\n' alone withheld it until the run finished.
+		i := bytes.IndexAny(r.buf, "\r\n")
 		if i < 0 {
 			break
 		}
-		line := string(r.buf[:i+1])
-		r.buf = r.buf[i+1:]
+		end := i + 1
+		if r.buf[i] == '\r' && end < len(r.buf) && r.buf[end] == '\n' {
+			end++ // CRLF is one terminator, not two
+		}
+		line := string(r.buf[:end])
+		r.buf = r.buf[end:]
 		if _, err := io.WriteString(r.W, Redact(line)); err != nil {
 			return 0, err
 		}

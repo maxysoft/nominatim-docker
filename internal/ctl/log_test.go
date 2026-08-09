@@ -56,6 +56,26 @@ func TestRedactWriterHandlesSplitWrites(t *testing.T) {
 	}
 }
 
+// osm2pgsql reports progress with bare '\r'. Splitting on '\n' alone buffered
+// the whole progress stream until the run ended, so a 21-minute import showed
+// nothing and then dumped one enormous line.
+func TestRedactWriterSplitsOnCarriageReturn(t *testing.T) {
+	var sink strings.Builder
+	w := &RedactWriter{W: &sink}
+
+	w.Write([]byte("Processing: Node(1k)\rProcessing: Node(2k)\r"))
+	if got := sink.String(); got != "Processing: Node(1k)\rProcessing: Node(2k)\r" {
+		t.Fatalf("progress not emitted per \\r: %q", got)
+	}
+
+	// CRLF must not produce a spurious empty line.
+	sink.Reset()
+	w.Write([]byte("done\r\nnext\n"))
+	if got := sink.String(); got != "done\r\nnext\n" {
+		t.Fatalf("CRLF mishandled: %q", got)
+	}
+}
+
 // A child that exits without a trailing newline must not lose its last line.
 func TestRedactWriterFlushesPartialLine(t *testing.T) {
 	var sink strings.Builder

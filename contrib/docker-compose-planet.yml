@@ -18,6 +18,9 @@ services:
     container_name: nominatim-postgres
     hostname: nominatim-postgres
     restart: unless-stopped
+    # PostgreSQL uses /dev/shm for parallel workers; the 64MB default is
+    # too small for an import. The API container does not need it.
+    shm_size: 1gb
     environment:
       POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:?set POSTGRES_ADMIN_PASSWORD in .env}
       POSTGRES_USER: postgres
@@ -48,7 +51,6 @@ services:
     container_name: nominatim
     hostname: nominatim
     restart: unless-stopped
-    shm_size: 1gb
     ports:
       - "8080:8080"
     environment:

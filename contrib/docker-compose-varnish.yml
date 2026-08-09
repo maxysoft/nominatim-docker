@@ -11,6 +11,9 @@ services:
     container_name: nominatim-postgres
     hostname: nominatim-postgres
     restart: unless-stopped
+    # PostgreSQL uses /dev/shm for parallel workers; the 64MB default is
+    # too small for an import. The API container does not need it.
+    shm_size: 1gb
     environment:
       POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:?set POSTGRES_ADMIN_PASSWORD in .env}
       POSTGRES_USER: postgres
@@ -40,7 +43,6 @@ services:
     container_name: nominatim
     hostname: nominatim
     restart: unless-stopped
-    shm_size: 1gb
     environment:
       # External database configuration
       POSTGRES_HOST: nominatim-postgres
@@ -53,6 +55,14 @@ services:
       # see https://github.com/maxysoft/nominatim-docker/tree/master/5.3#configuration for more options
       PBF_URL: https://download.geofabrik.de/europe/monaco-latest.osm.pbf
       REPLICATION_URL: https://download.geofabrik.de/europe/monaco-updates/
+
+      # Importance data. Without it search-result ranking is degraded and
+      # `nominatim admin --check-database` reports the tables as missing.
+      IMPORT_WIKIPEDIA: "true"
+
+      # Defaults to the logical CPU count, which on an SMT host is twice the
+      # physical cores and oversubscribes the import. Set it to physical cores.
+      THREADS: 4
     # No setuid binary remains in the image, so privilege escalation can be
     # blocked outright. The retained capabilities are what the entrypoint needs
     # to take ownership of the volume and drop to the unprivileged user.

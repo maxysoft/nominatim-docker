@@ -131,6 +131,20 @@ Repository cleanup from an over-engineering audit:
   `managed by nominatim-docker` role comments, without which the entrypoint refuses to reconcile
   the roles it did not create.
 
+Import tuning, from analysing a real Italy import log:
+
+- **Fixed:** `max_wal_size` was 2GB in `postgresql.conf` and 3GB in `16g-postgresql.conf`, so an import
+  spent most of its time flushing: 134 of 135 checkpoints were WAL-triggered and PostgreSQL logged
+  "checkpoints are occurring too frequently" 35 times. Both profiles now use 8GB with a 30 minute
+  `checkpoint_timeout`. WAL sizing tracks write volume, not host RAM, so it is the same in both.
+- **Fixed:** `shm_size: 1gb` sat on the API container, which only writes Gunicorn heartbeat files to
+  `/dev/shm`, while PostgreSQL was left on the 64MB default it needs for parallel workers. Moved to
+  the database service in all four compose files.
+- **Fixed:** `RedactWriter` split child output on `\n` only, so osm2pgsql's `\r` progress stream was
+  withheld for the whole run and then dumped at once. It now splits on either terminator.
+- **Changed:** `contrib/docker-compose-varnish.yml` sets `IMPORT_WIKIPEDIA: "true"` and `THREADS: 4`.
+  `THREADS` defaults to the logical CPU count, which oversubscribes an SMT host.
+
 ### v5.3.2 (2026-04-22)
 
 - **Changed:** Merge from upstream (mediagis/nominatim-docker) to sync docs and contributors
