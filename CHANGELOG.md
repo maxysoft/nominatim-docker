@@ -154,6 +154,21 @@ Import tuning, from analysing a real Italy import log:
   the import itself.
 - **Fixed:** `make vet`/`test`/`tidy`/`fmt` failed on a fresh host with `permission denied`: the Go
   cache volumes were created root-owned while the toolchain runs as the invoking user.
+- **Changed:** A rejected database password now fails immediately with "PostgreSQL rejected the
+  credentials" instead of retrying for the full five-minute connection budget.
+- **Changed:** The entrypoint binary is copied as the last layer of the `serve` and `full` stages, so
+  a Go-only change rebuilds in seconds instead of re-running the apt layers.
+- **Changed:** `test/docker-compose.test.yml` and the CI `start-postgres` helper pin `postgis/postgis`
+  by digest like the `contrib/` stacks already did.
+- **Changed:** Built with Go 1.27.1, pinned by digest. Since Go 1.25 the runtime derives `GOMAXPROCS`
+  from the cgroup CPU quota, so the hand-rolled `/sys/fs/cgroup/cpu.max` parser is gone. `THREADS`
+  and `GUNICORN_WORKERS` still default to the container's CPU allowance; cgroup v1 is now honoured
+  too, and a quota below two CPUs yields 2 rather than 1.
+- **Changed:** Base image bumped to `debian:13.6-slim` and every `postgis/postgis:18-3.6-alpine` pin
+  refreshed to the digest the tag currently resolves to; both pinned by index digest.
+- **Security:** The build no longer runs `pip install --upgrade pip setuptools wheel`, which fetched
+  unpinned packages from PyPI; Debian's pip installs the hash-checked requirements and is then
+  removed from the image. Dropped `libgl1` from the purge list (no longer installed).
 - **Changed:** `contrib/docker-compose-varnish.yml` sets `IMPORT_WIKIPEDIA: "true"` and `THREADS: 4`.
   `THREADS` defaults to the logical CPU count, which oversubscribes an SMT host.
 

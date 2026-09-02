@@ -3,9 +3,13 @@ ARG NOMINATIM_VERSION=5.3.2
 ARG USER_AGENT=maxysoft/nominatim-docker:${NOMINATIM_VERSION}
 
 # Pinned by digest so a mutated tag can never change the base image.
-# To upgrade: docker pull debian:13.4-slim, read the new digest, update here.
-ARG BASE_IMAGE=debian:13.4-slim@sha256:cedb1ef40439206b673ee8b33a46a03a0c9fa90bf3732f54704f99cb061d2c5a
-ARG GO_IMAGE=golang:1.24-bookworm
+# To upgrade: docker buildx imagetools inspect debian:<version>-slim, copy the
+# index digest, update here and BASE_IMAGE in the Makefile.
+ARG BASE_IMAGE=debian:13.6-slim@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b6259bc132
+# Pinned by digest like the base image. To upgrade: docker buildx imagetools
+# inspect golang:<version>-bookworm, copy the index digest, update here, in the
+# Makefile and in .github/workflows/ci.yml.
+ARG GO_IMAGE=golang:1.27.1-bookworm@sha256:648f440f42a0958804efb24df176f806f9d353b41f1c0627f666428e40310f6b
 
 # Fixed IDs so a rebuilt image keeps working with existing data volumes.
 ARG NOMINATIM_UID=1000
@@ -49,21 +53,26 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         python3-icu \
         python3-venv
 
+# Debian's venv seeds pip from python3-pip-whl. It is not upgraded (that was
+# the one unpinned download in the build) and is removed once the pinned,
+# hash-checked requirements are installed: the runtime image has no use for a
+# package installer.
 COPY requirements.txt /tmp/requirements.txt
 RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
     python3 -m venv --system-site-packages /opt/nominatim \
-    && /opt/nominatim/bin/pip install --no-cache-dir --upgrade pip setuptools wheel \
-    && /opt/nominatim/bin/pip install --no-cache-dir --require-hashes -r /tmp/requirements.txt \
+    && /opt/nominatim/bin/pip install --disable-pip-version-check --require-hashes -r /tmp/requirements.txt \
+    && /opt/nominatim/bin/pip uninstall -y --disable-pip-version-check pip \
     && find /opt/nominatim -name '__pycache__' -type d -prune -exec rm -rf {} +
 
 
 # ---------------------------------------------------------------------------
-# Stage 3, serve: what the long-running API container needs, nothing more.
-# osm2pgsql and postgresql-client live only in the full image (next stage);
-# the entrypoint refuses to import or replicate without them.
-# Build with --target serve; published as the -serve tags.
+# Stage 3, serve-base: what the long-running API container needs, nothing
+# more. osm2pgsql and postgresql-client live only in the full image; the
+# entrypoint refuses to import or replicate without them. The entrypoint
+# binary itself is copied in the final stages below, as their last layer, so
+# a Go change never re-runs an apt layer.
 # ---------------------------------------------------------------------------
-FROM ${BASE_IMAGE} AS serve
+FROM ${BASE_IMAGE} AS serve-base
 
 ARG NOMINATIM_VERSION
 ARG USER_AGENT
@@ -101,7 +110,6 @@ RUN echo "nominatim:x:${NOMINATIM_UID}:${NOMINATIM_GID}::${NOMINATIM_HOME}:/usr/
     && chown ${NOMINATIM_UID}:${NOMINATIM_GID} ${NOMINATIM_HOME} ${PROJECT_DIR}
 
 COPY --from=py-build /opt/nominatim /opt/nominatim
-COPY --from=go-build /out/nominatim-ctl /usr/local/bin/nominatim-ctl
 
 # Strip every setuid/setgid bit the base packages ship. The entrypoint drops
 # privilege with a direct setuid, so they are only an escalation surface.
@@ -130,11 +138,19 @@ CMD ["serve"]
 
 
 # ---------------------------------------------------------------------------
-# Stage 4, full (the default image): serve plus the import and replication
+# Stage 4, serve: build with --target serve; published as the -serve tags.
+# ---------------------------------------------------------------------------
+FROM serve-base AS serve
+
+COPY --from=go-build /out/nominatim-ctl /usr/local/bin/nominatim-ctl
+
+
+# ---------------------------------------------------------------------------
+# Stage 5, full (the default image): serve plus the import and replication
 # tooling. `nominatim import` runs osm2pgsql, and `nominatim replication`
 # shells out to it for every diff, so both capabilities live here.
 # ---------------------------------------------------------------------------
-FROM serve AS full
+FROM serve-base AS full
 
 # hadolint ignore=DL3008  # see docs/REFACTOR.md: base image is digest-pinned; apt floats deliberately
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
@@ -155,7 +171,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     && dpkg --purge --force-depends \
         libopencv-imgcodecs410 libopencv-imgproc410 libopencv-core410 \
         libgdal36 mesa-libgallium libllvm19 libz3-4 \
-        libgbm1 libglx-mesa0 libglx0 libgl1 \
+        libgbm1 libglx-mesa0 libglx0 \
         libgdcm3.0t64 libnetcdf22 libhdf5-310 libhdf5-hl-310 \
         libpoppler147 libcfitsio10t64 libxerces-c3.2t64 \
         libspatialite8t64 libgeotiff5 \
@@ -168,3 +184,5 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     # case a package installed here ships a setuid/setgid binary.
     && find / -xdev -type f -perm /6000 -exec chmod ug-s {} + \
     && [ -z "$(find / -xdev -type f -perm /6000)" ]
+
+COPY --from=go-build /out/nominatim-ctl /usr/local/bin/nominatim-ctl

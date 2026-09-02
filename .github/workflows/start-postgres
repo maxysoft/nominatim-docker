@@ -20,7 +20,7 @@ docker run -d --rm --name postgres --network "$net" \
   -e POSTGRES_USER=postgres \
   -e POSTGRES_DB=nominatim \
   "$@" \
-  postgis/postgis:18-3.6-alpine
+  postgis/postgis:18-3.6-alpine@sha256:ffcf0c4b904e41b9779f8098007fb5a9484025319c18c70cf8e1bcebb742b9b7
 
 # Matches the docker-compose healthcheck cadence.
 for _ in $(seq 1 60); do

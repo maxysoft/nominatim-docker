@@ -2,7 +2,6 @@ package ctl
 
 import (
 	"fmt"
-	"math"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -147,8 +146,10 @@ func Load() (*Config, error) {
 		c.WebUserPassword = c.NominatimPassword
 	}
 
-	// Sized from the CPU allowance actually granted to this container.
-	cpus := availableCPUs()
+	// Sized from the CPU allowance actually granted to this container: since
+	// Go 1.25 the runtime derives GOMAXPROCS from the cgroup CPU quota (rounded
+	// up, minimum 2), so `--cpus=2` on a 64-core host yields 2, not 64.
+	cpus := runtime.GOMAXPROCS(0)
 	if c.Threads, err = envInt("THREADS", cpus); err != nil {
 		return nil, err
 	}
@@ -334,42 +335,6 @@ func envSecret(name string) (string, error) {
 		return strings.TrimRight(string(b), "\r\n"), nil
 	}
 	return os.Getenv(name), nil
-}
-
-// availableCPUs returns the CPUs this container may actually use.
-// runtime.NumCPU honours the affinity mask but not the CFS quota, so
-// `--cpus=2` on a 64-core host would otherwise oversubscribe the container
-// and exhaust the database connection limit. cgroup v2 only.
-func availableCPUs() int {
-	n := runtime.NumCPU()
-	b, err := os.ReadFile("/sys/fs/cgroup/cpu.max")
-	if err != nil {
-		Logf("note: no cgroup v2 cpu.max; sizing from %d host CPUs. "+
-			"Set THREADS and GUNICORN_WORKERS explicitly if this container is CPU-limited.", n)
-		return n
-	}
-	if q := parseCPUMax(string(b)); q > 0 && q < n {
-		n = q
-	}
-	if n < 1 {
-		n = 1
-	}
-	return n
-}
-
-// parseCPUMax reads "<quota> <period>" ("max <period>" when unlimited) and
-// returns the quota rounded up to whole CPUs.
-func parseCPUMax(s string) int {
-	f := strings.Fields(strings.TrimSpace(s))
-	if len(f) != 2 || f[0] == "max" {
-		return 0
-	}
-	quota, err1 := strconv.Atoi(f[0])
-	period, err2 := strconv.Atoi(f[1])
-	if err1 != nil || err2 != nil || quota <= 0 || period <= 0 {
-		return 0
-	}
-	return int(math.Ceil(float64(quota) / float64(period)))
 }
 
 // RenderEnvFile builds the Nominatim project .env, regenerated in full on

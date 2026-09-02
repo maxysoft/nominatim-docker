@@ -368,6 +368,22 @@ scenario_failfast() {
   else
     bad "invalid UPDATE_MODE accepted (rc=$rc): ${out:0:200}"
   fi
+
+  # A rejected password must fail within seconds, not after the five-minute
+  # connection budget. Needs a reachable server, so make sure one is up.
+  $COMPOSE up -d postgres >/dev/null 2>&1
+  set +e
+  out=$(timeout 90 docker run --rm --network nominatim-itest_default \
+        -e POSTGRES_HOST=postgres -e POSTGRES_SSLMODE=disable \
+        -e NOMINATIM_PASSWORD=x -e POSTGRES_ADMIN_PASSWORD=wrong-password \
+        -e PBF_URL=https://example.invalid/a.pbf "$IMAGE" serve 2>&1)
+  rc=$?
+  set -e
+  if [[ $rc -ne 0 && $rc -ne 124 ]] && grep -q 'rejected the credentials' <<<"$out"; then
+    ok "wrong database password fails fast"
+  else
+    bad "wrong password did not fail fast (rc=$rc): ${out:0:200}"
+  fi
 }
 
 # A non-ASCII password only authenticates if our SASLprep matches the server's.

@@ -4,6 +4,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -270,32 +271,17 @@ func TestWebUserPasswordDefaultsButCanDiffer(t *testing.T) {
 	}
 }
 
-// nproc reports host cores because it reads the affinity mask, not the CFS
-// quota: `--cpus=2` on a 64-core host previously produced 64 osm2pgsql threads
-// and 64 Gunicorn workers, exhausting the database connection limit.
-func TestParseCPUMax(t *testing.T) {
-	cases := map[string]int{
-		"200000 100000":   2,
-		"100000 100000":   1,
-		"150000 100000":   2, // rounds up: half a CPU still needs a worker
-		"max 100000":      0,
-		"":                0,
-		"garbage":         0,
-		"200000":          0,
-		"0 100000":        0,
-		"200000 0":        0,
-		"400000 100000\n": 4,
+func TestThreadsDefaultToGOMAXPROCS(t *testing.T) {
+	env := baseEnv()
+	delete(env, "THREADS")
+	delete(env, "GUNICORN_WORKERS")
+	withEnv(t, env)
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
 	}
-	for in, want := range cases {
-		if got := parseCPUMax(in); got != want {
-			t.Errorf("parseCPUMax(%q) = %d, want %d", in, got, want)
-		}
-	}
-}
-
-func TestAvailableCPUsIsAtLeastOne(t *testing.T) {
-	if n := availableCPUs(); n < 1 {
-		t.Fatalf("availableCPUs() = %d", n)
+	if want := runtime.GOMAXPROCS(0); c.Threads != want || c.GunicornWorkers != want {
+		t.Fatalf("THREADS=%d GUNICORN_WORKERS=%d, want %d", c.Threads, c.GunicornWorkers, want)
 	}
 }
 

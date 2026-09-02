@@ -1,9 +1,30 @@
 package ctl
 
 import (
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/jackc/pgx/v5/pgconn"
 )
+
+// A wrong password used to be retried for the whole five-minute budget before
+// surfacing as a generic "not reachable".
+func TestIsAuthError(t *testing.T) {
+	if !isAuthError(fmt.Errorf("connect: %w", &pgconn.PgError{Code: "28P01"})) {
+		t.Fatal("wrapped invalid_password not recognised")
+	}
+	if !isAuthError(&pgconn.PgError{Code: "28000"}) {
+		t.Fatal("invalid_authorization_specification not recognised")
+	}
+	if isAuthError(&pgconn.PgError{Code: "57P03"}) {
+		t.Fatal("a server still starting up must be retried")
+	}
+	if isAuthError(errors.New("dial tcp: connection refused")) {
+		t.Fatal("a refused connection must be retried")
+	}
+}
 
 // A password reaching ALTER ROLE unescaped was arbitrary SQL execution as the
 // PostgreSQL superuser.

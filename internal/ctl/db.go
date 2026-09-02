@@ -7,12 +7,14 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/xdg-go/stringprep"
 )
 
@@ -43,12 +45,25 @@ func waitForDatabase(ctx context.Context, url string, attempts int, delay time.D
 			conn.Close(ctx)
 			return nil
 		}
+		// A rejected password is final; waiting out the budget would only
+		// delay the same error by five minutes.
+		if isAuthError(err) {
+			return fmt.Errorf("PostgreSQL rejected the credentials: %w", err)
+		}
 		last = err
 		if i == 0 || (i+1)%10 == 0 {
 			Logf("waiting for PostgreSQL (attempt %d/%d): %v", i+1, attempts, Redact(err.Error()))
 		}
 	}
 	return fmt.Errorf("PostgreSQL not reachable after %d attempts: %w", attempts, last)
+}
+
+// isAuthError reports a SQLSTATE class 28 (invalid authorization) failure.
+// A server that is still starting up reports 57P03 and a refused connection is
+// not a PgError at all, so both keep retrying.
+func isAuthError(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && strings.HasPrefix(pgErr.Code, "28")
 }
 
 // ensureRole creates role if it is absent, and reconciles its password and

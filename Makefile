@@ -3,8 +3,8 @@
 # Dependency and compiler caches are named volumes, otherwise each run
 # recompiles the world.
 
-GO_IMAGE   ?= golang:1.24-bookworm
-BASE_IMAGE ?= debian:13.4-slim
+GO_IMAGE   ?= golang:1.27.1-bookworm@sha256:648f440f42a0958804efb24df176f806f9d353b41f1c0627f666428e40310f6b
+BASE_IMAGE ?= debian:13.6-slim@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b6259bc132
 UID        := $(shell id -u)
 GID        := $(shell id -g)
 

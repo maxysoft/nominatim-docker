@@ -60,7 +60,7 @@ local socket that does not exist in this image.
 | Supplementary data | `sshpass -p <password> scp -o StrictHostKeyChecking=no` | HTTPS against the system CA bundle, optional SHA-256 |
 | API supervision | `--daemon` + PID-file polling + unconditional `exit 0` | Foreground child, `cmd.Wait()`, real exit code propagated |
 | Shutdown | Trap deferred behind `sleep 5`; kill then immediate exit | Signal wakes the select immediately; SIGTERM, drain, escalate to SIGKILL at 35 s |
-| Worker sizing | `nproc` (blind to the CFS quota) | `/sys/fs/cgroup/cpu.max`, falling back to `NumCPU` |
+| Worker sizing | `nproc` (blind to the CFS quota) | `runtime.GOMAXPROCS`, cgroup-aware since Go 1.25 |
 | Zombie reaping | Incidental, via bash's SIGCHLD handling | Delegated to the runtime (`init: true` / `docker run --init`); see note below |
 | Failure modes | Three unbounded `until` loops with stderr discarded | Bounded retries that report the real driver error and exit non-zero |
 
@@ -321,7 +321,7 @@ does run:
 
 Unit tests cover the pure logic where the shell bugs lived: SQL quoting against
 the injection strings, `.env` rendering idempotence and the interval-splicing
-bug, cgroup CPU parsing, secret redaction, and configuration validation.
+bug, secret redaction, and configuration validation.
 
 ---
 
