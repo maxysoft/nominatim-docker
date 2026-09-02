@@ -142,6 +142,18 @@ Import tuning, from analysing a real Italy import log:
   the database service in all four compose files.
 - **Fixed:** `RedactWriter` split child output on `\n` only, so osm2pgsql's `\r` progress stream was
   withheld for the whole run and then dumped at once. It now splits on either terminator.
+- **Fixed:** `DROP DATABASE ... WITH (FORCE)` was never emitted: `SHOW server_version_num` returns
+  text, which pgx refuses to scan into an int, so the version check always failed silently and a
+  connection left by a previous container made every re-import fail with "is being accessed by
+  other users". The version is now read via `current_setting(...)::int`.
+- **Security:** `NOMINATIM_PASSWORD` and `NOMINATIM_WEBUSER_PASSWORD` were forwarded to every child
+  process because they match the `NOMINATIM_*` passthrough. Gunicorn, which connects as the
+  read-only web role, therefore still carried the `CREATEDB` role's password in its environment.
+- **Fixed:** `nominatim-ctl import` did not record the completion marker, so the next `serve` took
+  the slow validate-and-adopt path instead of skipping the import. The marker is now written by
+  the import itself.
+- **Fixed:** `make vet`/`test`/`tidy`/`fmt` failed on a fresh host with `permission denied`: the Go
+  cache volumes were created root-owned while the toolchain runs as the invoking user.
 - **Changed:** `contrib/docker-compose-varnish.yml` sets `IMPORT_WIKIPEDIA: "true"` and `THREADS: 4`.
   `THREADS` defaults to the logical CPU count, which oversubscribes an SMT host.
 

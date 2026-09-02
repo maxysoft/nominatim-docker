@@ -15,10 +15,18 @@ GO_RUN = docker run --rm -u $(UID):$(GID) \
 	-e GOMODCACHE=/gocache/mod -e GOCACHE=/gocache/build -e GOFLAGS=-mod=mod \
 	$(GO_IMAGE)
 
-.PHONY: help tidy fmt vet test lint build requirements integration check clean
+.PHONY: help gocache tidy fmt vet test lint build requirements integration check clean
 
 help:
 	@grep -hE '^[a-z-]+:.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | column -t -s "$$(printf '\t')"
+
+# A fresh named volume is root-owned, and the toolchain runs as the invoking
+# user so files it writes into the checkout keep host ownership.
+gocache:
+	docker run --rm -v nominatim-gocache-mod:/gocache/mod -v nominatim-gocache-build:/gocache/build \
+		$(GO_IMAGE) chown $(UID):$(GID) /gocache/mod /gocache/build
+
+tidy fmt vet test: gocache
 
 tidy: ## Resolve module dependencies and write go.sum
 	$(GO_RUN) go mod tidy

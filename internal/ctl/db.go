@@ -132,9 +132,10 @@ func dropDatabase(ctx context.Context, conn *pgx.Conn, dbname string, hasData, a
 		Logf("WARNING: ALLOW_DROP_EXISTING_DB=true, dropping populated database %q", dbname)
 	}
 	// FORCE terminates connections left by a previous container; PostgreSQL 13+.
+	// Cast on the server: SHOW yields text, which pgx will not scan into an int.
 	force := false
 	var verNum int
-	if err := conn.QueryRow(ctx, "SHOW server_version_num").Scan(&verNum); err == nil && verNum >= 130000 {
+	if err := conn.QueryRow(ctx, "SELECT current_setting('server_version_num')::int").Scan(&verNum); err == nil && verNum >= 130000 {
 		force = true
 	}
 	if _, err := conn.Exec(ctx, dropDatabaseSQL(dbname, force)); err != nil {

@@ -33,8 +33,11 @@ func BaseEnv(c *Config) []string {
 		if !ok {
 			continue
 		}
-		// The DSN is owned by this process.
-		if k == "NOMINATIM_DATABASE_DSN" {
+		// The DSN is owned by this process, and the role passwords must not
+		// reach a child: Gunicorn connects as the web role, and inheriting
+		// NOMINATIM_PASSWORD would hand it the CREATEDB role anyway.
+		switch k {
+		case "NOMINATIM_DATABASE_DSN", "NOMINATIM_PASSWORD", "NOMINATIM_WEBUSER_PASSWORD":
 			continue
 		}
 		if strings.HasPrefix(k, "NOMINATIM_") || strings.HasPrefix(k, "PG") {
@@ -174,11 +177,7 @@ func ensureImported(ctx context.Context, c *Config, r *Runner) error {
 	}
 
 	Logf("no completed Nominatim import in %q, running import", c.PostgresDB)
-	if err := RunImport(ctx, c, r); err != nil {
-		return err
-	}
-	// Recorded only after full success, so an interrupted run is retried.
-	return recordImport(ctx, c.LibpqURL("nominatim", c.NominatimPassword, c.PostgresDB), c.PostgresDB)
+	return RunImport(ctx, c, r)
 }
 
 // recordImport stamps the completion marker; COMMENT ON DATABASE needs

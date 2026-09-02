@@ -84,9 +84,12 @@ func RunImport(ctx context.Context, c *Config, r *Runner) error {
 	if err != nil {
 		return err
 	}
-	_, err = conn.Exec(ctx, "ANALYZE")
-	conn.Close(ctx)
-	if err != nil {
+	defer conn.Close(ctx)
+	if _, err := conn.Exec(ctx, "ANALYZE"); err != nil {
+		return err
+	}
+	// Recorded only after full success, so an interrupted run is retried.
+	if err := markImportComplete(ctx, conn, c.PostgresDB); err != nil {
 		return err
 	}
 
