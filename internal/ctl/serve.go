@@ -63,16 +63,24 @@ func PrepareProjectDir(c *Config, uid, gid int) error {
 	return WriteEnvFile(c, uid, gid)
 }
 
+// NewRunner resolves the unprivileged account, prepares the project directory
+// and returns the Runner every subcommand launches Nominatim through.
+func NewRunner(c *Config) (*Runner, error) {
+	uid, gid, err := LookupNominatimUser()
+	if err != nil {
+		return nil, err
+	}
+	if err := PrepareProjectDir(c, uid, gid); err != nil {
+		return nil, err
+	}
+	return &Runner{UID: uid, GID: gid, Dir: c.ProjectDir, Env: BaseEnv(c)}, nil
+}
+
 // Serve runs the full container lifecycle: configure, import if needed, then
 // supervise the API server until it exits or the context is cancelled.
 func Serve(ctx context.Context, c *Config) error {
-	uid, gid, err := LookupNominatimUser()
+	r, err := NewRunner(c)
 	if err != nil {
-		return err
-	}
-	r := &Runner{UID: uid, GID: gid, Dir: c.ProjectDir, Env: BaseEnv(c)}
-
-	if err := PrepareProjectDir(c, uid, gid); err != nil {
 		return err
 	}
 	if c.Debug {
@@ -85,7 +93,7 @@ func Serve(ctx context.Context, c *Config) error {
 		}
 	}
 
-	if err := ensureImported(ctx, c, r); err != nil {
+	if err := EnsureImported(ctx, c, r); err != nil {
 		return err
 	}
 
@@ -120,10 +128,10 @@ func Serve(ctx context.Context, c *Config) error {
 	return runGunicorn(ctx, c, r, replication)
 }
 
-// ensureImported decides whether an import is required, and runs one if so.
+// EnsureImported decides whether an import is required, and runs one if so.
 // The decision is made only after the server is known reachable, because a booting
 // database must not be mistaken for an empty one on a routine restart.
-func ensureImported(ctx context.Context, c *Config, r *Runner) error {
+func EnsureImported(ctx context.Context, c *Config, r *Runner) error {
 	haveAdmin := c.AdminPassword != ""
 
 	probeURL := c.LibpqURL("nominatim", c.NominatimPassword, c.PostgresDB)
@@ -136,6 +144,19 @@ func ensureImported(ctx context.Context, c *Config, r *Runner) error {
 			return err
 		}
 		return fmt.Errorf("%w\n(no POSTGRES_ADMIN_PASSWORD is set, so the database cannot be provisioned either)", err)
+	}
+
+	// settled finishes for a database confirmed to be ours. Only then are the
+	// roles reconciled: they are server-wide, and a container pointed at the
+	// wrong database must not rewrite their passwords. A failure is a warning,
+	// not an error: roles adopted from another installation lack our marker.
+	settled := func() error {
+		if haveAdmin {
+			if err := reconcileRoles(ctx, c, probeURL); err != nil {
+				Logf("WARNING: role passwords not reconciled: %v", Redact(err.Error()))
+			}
+		}
+		return chownProjectFiles(c, r.UID, r.GID)
 	}
 
 	targetURL := c.LibpqURL("nominatim", c.NominatimPassword, c.PostgresDB)
@@ -156,7 +177,7 @@ func ensureImported(ctx context.Context, c *Config, r *Runner) error {
 
 	if complete {
 		Logf("existing Nominatim import found in %q, skipping import", c.PostgresDB)
-		return chownProjectFiles(c, r.UID, r.GID)
+		return settled()
 	}
 
 	if hasData && !c.AllowDropExistingDB {
@@ -173,7 +194,7 @@ func ensureImported(ctx context.Context, c *Config, r *Runner) error {
 		if err := recordImport(ctx, targetURL, c.PostgresDB); err != nil {
 			return err
 		}
-		return chownProjectFiles(c, r.UID, r.GID)
+		return settled()
 	}
 
 	Logf("no completed Nominatim import in %q, running import", c.PostgresDB)
@@ -222,6 +243,18 @@ func startReplication(ctx context.Context, c *Config, r *Runner) (*exec.Cmd, err
 		return nil, nil
 	}
 
+	Logf("starting replication (%s)", c.UpdateMode)
+	cmd := r.Command(ctx, "nominatim", replicationArgs(c)...)
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("starting replication: %w", err)
+	}
+	// Reaped here: with UPDATE_MODE=once nothing else would ever wait on it.
+	go func() { _ = cmd.Wait() }()
+	return cmd, nil
+}
+
+// replicationArgs builds the `nominatim replication` invocation for UpdateMode.
+func replicationArgs(c *Config) []string {
 	args := []string{"replication", "--project-dir", c.ProjectDir}
 	switch c.UpdateMode {
 	case "once":
@@ -229,14 +262,59 @@ func startReplication(ctx context.Context, c *Config, r *Runner) (*exec.Cmd, err
 	case "catch-up":
 		args = append(args, "--catch-up")
 	}
-	Logf("starting replication (%s)", c.UpdateMode)
-	cmd := r.Command(ctx, "nominatim", args...)
-	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("starting replication: %w", err)
+	return args
+}
+
+// Replicate runs the replication process in the foreground: the updater
+// service of a split deployment, where the API runs on the serve image and
+// this container, on the full image, is the only one that ships osm2pgsql.
+// It exits with the process's status, so `once` and `catch-up` end the
+// container and the orchestrator's restart policy governs `continuous`.
+func Replicate(ctx context.Context, c *Config) error {
+	switch {
+	case c.ReplicationURL == "":
+		return errors.New("REPLICATION_URL must be set to replicate")
+	case c.Freeze:
+		return errors.New("FREEZE=true: a frozen database cannot take updates")
+	case !HaveImportTools():
+		return errors.New("this is the serve-only image: osm2pgsql is not installed, so it cannot apply updates; run replicate from the full image")
 	}
-	// Reaped here: with UPDATE_MODE=once nothing else would ever wait on it.
-	go func() { _ = cmd.Wait() }()
-	return cmd, nil
+	if c.UpdateMode == "" {
+		c.UpdateMode = "continuous"
+	}
+
+	r, err := NewRunner(c)
+	if err != nil {
+		return err
+	}
+
+	// Probed through the maintenance database: the target may not exist yet,
+	// and that must read as "run the import first", not as a five-minute wait.
+	probeURL := c.LibpqURL("nominatim", c.NominatimPassword, "postgres")
+	Logf("waiting for PostgreSQL at %s:%d", c.PostgresHost, c.PostgresPort)
+	if err := waitForDatabase(ctx, probeURL, 150, 2*time.Second); err != nil {
+		return err
+	}
+	conn, err := pgx.Connect(ctx, probeURL)
+	if err != nil {
+		return err
+	}
+	complete := importComplete(ctx, conn, c.PostgresDB)
+	conn.Close(ctx)
+	if !complete {
+		return fmt.Errorf("no completed Nominatim import in %q; run `nominatim-ctl import` first", c.PostgresDB)
+	}
+
+	// Unlike serve, an unreachable URL is an error here: this container has no
+	// other job, and exiting non-zero lets the restart policy retry.
+	if !NewDownloader(c.UserAgent).Reachable(ctx, c.ReplicationURL, 3, 2*time.Second) {
+		return fmt.Errorf("REPLICATION_URL %s is unreachable", c.ReplicationURL)
+	}
+	if err := r.Run(ctx, "nominatim", "replication", "--init", "--project-dir", c.ProjectDir); err != nil {
+		return err
+	}
+	Logf("starting replication (%s)", c.UpdateMode)
+	return r.Run(ctx, "nominatim", replicationArgs(c)...)
 }
 
 // runGunicorn starts the API in the foreground and supervises it, so a crash

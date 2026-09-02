@@ -169,6 +169,22 @@ Import tuning, from analysing a real Italy import log:
 - **Security:** The build no longer runs `pip install --upgrade pip setuptools wheel`, which fetched
   unpinned packages from PyPI; Debian's pip installs the hash-checked requirements and is then
   removed from the image. Dropped `libgl1` from the purge list (no longer installed).
+- **Added:** `nominatim-ctl replicate` runs replication in the foreground, so updates can run in their
+  own container on the full image while the API runs on the serve image.
+- **Changed:** `nominatim-ctl import` skips a completed import (the same decision `serve` makes)
+  instead of refusing, so a one-shot import service can be re-run on every `compose up`.
+- **Added:** `nominatim-ctl reimport` drops the database and imports again: the explicit one-shot
+  form of a forced re-import, so no persistent environment switch can drop a database on a routine
+  `compose up`.
+- **Changed:** Every `contrib/docker-compose*.yml` runs three containers: a one-shot `nominatim-import`
+  (full image), the `nominatim` API on the serve image with no import tooling and no admin
+  credentials, and `nominatim-updater` behind `--profile updates`. The local file drops its fixed
+  container and network names so the integration suite can run it next to a developer's copy.
+  Covered by integration scenario `split`.
+- **Changed:** A container that holds `POSTGRES_ADMIN_PASSWORD` reconciles the role passwords when it
+  finds its completed import, so a rotated `NOMINATIM_PASSWORD` takes effect without a re-import.
+- **Changed:** An `import` interrupted by a stop exits non-zero, so it can never satisfy a
+  `service_completed_successfully` dependency with a partial database.
 - **Changed:** `contrib/docker-compose-varnish.yml` sets `IMPORT_WIKIPEDIA: "true"` and `THREADS: 4`.
   `THREADS` defaults to the logical CPU count, which oversubscribes an SMT host.
 

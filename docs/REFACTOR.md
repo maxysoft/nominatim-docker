@@ -242,7 +242,8 @@ are pinned to commit SHAs and the workflow has a least-privilege
 5. **Import is detected from the database, not `import-finished`.** A container
    pointed at a populated database will skip the import even on a fresh volume.
    That is the fix for the data-loss path, but it does mean re-importing into
-   the same database now requires `ALLOW_DROP_EXISTING_DB=true`.
+   the same database now requires `ALLOW_DROP_EXISTING_DB=true`, or the `reimport`
+   subcommand once an import has completed.
 6. **Dataset paths must be absolute.** `IMPORT_WIKIPEDIA=data/wiki.csv.gz`
    silently resolved against `/app` and was skipped; it is now rejected.
 7. **`UPDATE_MODE` is validated.** A typo used to mean "no replication",

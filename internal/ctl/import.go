@@ -143,19 +143,15 @@ func provisionDatabase(ctx context.Context, c *Config) error {
 		tc.Close(probeCtx)
 	}
 
+	if err := reconcileRoles(ctx, c, adminURL); err != nil {
+		return err
+	}
+
 	conn, err := pgx.Connect(ctx, adminURL)
 	if err != nil {
 		return err
 	}
 	defer conn.Close(ctx)
-
-	// CREATEDB is all the import needs once PostGIS is pre-installed below.
-	if err := ensureRole(ctx, conn, "nominatim", c.NominatimPassword, c.RoleOptions); err != nil {
-		return err
-	}
-	if err := ensureRole(ctx, conn, c.WebUser, c.WebUserPassword, ""); err != nil {
-		return err
-	}
 
 	if err := dropDatabase(ctx, conn, c.PostgresDB, hasData, c.AllowDropExistingDB); err != nil {
 		return err

@@ -1,9 +1,61 @@
+# Three nominatim-ctl containers: nominatim-import (full image) provisions the
+# database, imports and exits; nominatim (serve image) runs the API with no
+# import tooling and no admin credentials; nominatim-updater (full image, the
+# only one with osm2pgsql) applies replication diffs when started with
+# --profile updates. Re-running `up` is safe: the import container finds the
+# completed import and exits. To import a newer extract into the same database
+# (the API errors until it finishes):
+#
+#   docker compose -f contrib/docker-compose.yml run --rm nominatim-import reimport
+
 x-logging: &logging
   logging:
     driver: "json-file"
     options:
       max-size: 10m
       max-file: "3"
+
+# Hardening shared by every nominatim-ctl container. No setuid binary remains
+# in the image, so privilege escalation can be blocked outright; the retained
+# capabilities are what the entrypoint needs to take ownership of the volume
+# and drop to the unprivileged user (KILL: it runs as uid 0 and signals
+# children forked as uid 1000, which the kernel otherwise denies). Nothing
+# outside /nominatim (volume), /tmp and $HOME (tmpfs) and /dev/shm is ever
+# written, so the root filesystem can be immutable. init reaps orphaned
+# processes; the entrypoint deliberately does not.
+x-nominatim: &nominatim
+  init: true
+  security_opt:
+    - no-new-privileges:true
+  read_only: true
+  tmpfs:
+    - /tmp
+    - /var/lib/nominatim
+  cap_drop:
+    - ALL
+  cap_add:
+    - KILL
+    - CHOWN
+    - DAC_OVERRIDE
+    - FOWNER
+    - SETUID
+    - SETGID
+  networks:
+    - nominatim-net
+  <<: *logging
+
+# Database connection shared by every nominatim-ctl container.
+x-database: &database
+  POSTGRES_HOST: nominatim-postgres
+  POSTGRES_PORT: 5432
+  POSTGRES_DB: nominatim
+  NOMINATIM_PASSWORD: ${NOMINATIM_PASSWORD:?set NOMINATIM_PASSWORD in .env}
+
+# Import and updater share the project volume (the updater needs the flatnode
+# file the import wrote), so every setting either of them writes into .env
+# must be identical for both. Keep such settings here.
+x-replication: &replication
+  REPLICATION_URL: https://download.geofabrik.de/europe/monaco-updates/
 
 services:
   nominatim-postgres:
@@ -38,67 +90,82 @@ services:
     networks:
       - nominatim-net
 
-  nominatim:
+  # Runs once: provisions roles and extensions, imports, records completion.
+  # The image healthcheck probes the API, which this container never runs.
+  nominatim-import:
+    <<: *nominatim
     image: ghcr.io/maxysoft/nominatim-docker:latest
+    container_name: nominatim-import
+    command: import
+    restart: "no"
+    healthcheck:
+      disable: true
+    environment:
+      <<: [*database, *replication]
+      POSTGRES_ADMIN_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:?set POSTGRES_ADMIN_PASSWORD in .env}
+      # see https://github.com/maxysoft/nominatim-docker/blob/master/howto.md#configuration for more options
+      PBF_URL: https://download.geofabrik.de/europe/monaco-latest.osm.pbf
+      # Supplementary datasets (Wikipedia importance, GB/US postcodes, Tiger) are
+      # fetched over HTTPS from nominatim.org. Set the IMPORT_* switches to "true"
+      # to enable them, or point DATA_MIRROR_URL at your own mirror.
+      # DATA_MIRROR_URL: https://nominatim.org/data
+    volumes:
+      - nominatim-data:/nominatim
+    depends_on:
+      nominatim-postgres:
+        condition: service_healthy
+
+  # The API, on the serve image: no osm2pgsql, no psql, no admin credentials.
+  # Its own project volume: sharing the import's would overwrite the .env the
+  # updater reads with one lacking the replication settings.
+  nominatim:
+    <<: *nominatim
+    image: ghcr.io/maxysoft/nominatim-docker:serve
     container_name: nominatim
     hostname: nominatim
     restart: unless-stopped
     ports:
       - "8080:8080"
     environment:
-      # External database configuration
-      POSTGRES_HOST: nominatim-postgres
-      POSTGRES_PORT: 5432
-      POSTGRES_DB: nominatim
-      NOMINATIM_PASSWORD: ${NOMINATIM_PASSWORD:?set NOMINATIM_PASSWORD in .env}
-      POSTGRES_ADMIN_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:?set POSTGRES_ADMIN_PASSWORD in .env}
-      
-      # Nominatim configuration
-      # see https://github.com/maxysoft/nominatim-docker/tree/master/5.3#configuration for more options
-      PBF_URL: https://download.geofabrik.de/europe/monaco-latest.osm.pbf
-      REPLICATION_URL: https://download.geofabrik.de/europe/monaco-updates/
+      <<: *database
+    volumes:
+      - nominatim-serve-data:/nominatim
+    depends_on:
+      nominatim-postgres:
+        condition: service_healthy
+        restart: true
+      nominatim-import:
+        condition: service_completed_successfully
 
-      # Supplementary datasets (Wikipedia importance, GB/US postcodes, Tiger) are
-      # fetched over HTTPS from nominatim.org. Set the IMPORT_* switches to "true"
-      # to enable them, or point DATA_MIRROR_URL at your own mirror.
-      # DATA_MIRROR_URL: https://nominatim.org/data
-    # No setuid binary remains in the image, so privilege escalation can be
-    # blocked outright. The retained capabilities are what the entrypoint needs
-    # to take ownership of the volume and drop to the unprivileged user.
-    # Reap orphaned processes; the entrypoint deliberately does not.
-    init: true
-    security_opt:
-      - no-new-privileges:true
-    # Nothing outside /nominatim (volume), /tmp and $HOME (tmpfs below), and
-    # /dev/shm is ever written, so the root filesystem can be immutable.
-    read_only: true
-    tmpfs:
-      - /tmp
-      - /var/lib/nominatim
-    cap_drop:
-      - ALL
-    cap_add:
-      # KILL is required: the entrypoint runs as uid 0 and signals children it
-      # forked as uid 1000, which the kernel otherwise denies (EPERM).
-      - KILL
-      - CHOWN
-      - DAC_OVERRIDE
-      - FOWNER
-      - SETUID
-      - SETGID
+  # Optional: applies diffs from REPLICATION_URL. Start with --profile updates.
+  # on-failure, not unless-stopped: UPDATE_MODE=once or catch-up exit 0 when
+  # done and must stay stopped; continuous never exits 0 on its own.
+  nominatim-updater:
+    <<: *nominatim
+    profiles:
+      - updates
+    image: ghcr.io/maxysoft/nominatim-docker:latest
+    container_name: nominatim-updater
+    command: replicate
+    restart: on-failure
+    healthcheck:
+      disable: true
+    environment:
+      <<: [*database, *replication]
+      UPDATE_MODE: continuous
     volumes:
       - nominatim-data:/nominatim
     depends_on:
       nominatim-postgres:
         condition: service_healthy
         restart: true
-    <<: *logging
-    networks:
-      - nominatim-net
+      nominatim-import:
+        condition: service_completed_successfully
 
 volumes:
   postgres-data:
   nominatim-data:
+  nominatim-serve-data:
 
 networks:
   nominatim-net:

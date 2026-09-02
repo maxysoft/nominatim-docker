@@ -24,6 +24,18 @@ If Docker Hub secrets are not configured, images will only be pushed to GitHub C
   run the import (and any replication) with the full image against the same database, then
   point the serving container at this tag. Built locally with `docker build --target serve .`.
 
+Every `contrib/docker-compose*.yml` combines the two: a one-shot `nominatim-ctl import` container on
+the full image provisions the database, imports and exits; the API runs on the serve image with no
+admin credentials and no import tooling; an optional `nominatim-ctl replicate` container on the full
+image (`--profile updates`) applies replication diffs. Re-running the import container is safe: it
+finds the completed import, reconciles the role passwords (so a rotated `NOMINATIM_PASSWORD` takes
+effect) and exits. To import a newer extract into the same database run
+`docker compose -f contrib/docker-compose.yml run --rm nominatim-import reimport`, the one-shot form
+of "drop and import again". The import and updater containers share the project volume
+(the updater needs the flatnode file when flatnode storage is in use) and therefore must agree on
+every setting that lands in `.env`; the example keeps them in one shared block. The API has its own
+volume.
+
 All shipped compose files run the container with `read_only: true`; the runtime writes only to
 `/nominatim` (volume), `/tmp` and `$HOME` (tmpfs), and `/dev/shm`.
 

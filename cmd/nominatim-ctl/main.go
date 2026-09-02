@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/signal"
 	"strings"
@@ -54,26 +55,41 @@ func run() error {
 	switch cmd {
 	case "", "serve":
 		runErr = ctl.Serve(ctx, c)
-	case "import":
-		uid, gid, lookupErr := ctl.LookupNominatimUser()
-		if lookupErr != nil {
-			return lookupErr
+	case "import", "reimport":
+		r, err := ctl.NewRunner(c)
+		if err != nil {
+			return err
 		}
-		r := &ctl.Runner{UID: uid, GID: gid, Dir: c.ProjectDir, Env: ctl.BaseEnv(c)}
-		if runErr = ctl.PrepareProjectDir(c, uid, gid); runErr == nil {
+		if cmd == "reimport" {
+			// The explicit, one-shot "drop and import again", meant for
+			// `compose run --rm nominatim-import reimport`. A persistent
+			// environment switch would fire on every `compose up`.
+			c.AllowDropExistingDB = true
 			runErr = ctl.RunImport(ctx, c, r)
+		} else {
+			// The decision serve makes: skip a completed import, adopt or
+			// reject a partial one, import an empty database, so a one-shot
+			// import service can be re-run on every `compose up`.
+			runErr = ctl.EnsureImported(ctx, c, r)
 		}
+	case "replicate":
+		runErr = ctl.Replicate(ctx, c)
 	case "config":
 		_, err := os.Stdout.WriteString(ctl.RenderEnvFile(c))
 		return err
 	default:
-		ctl.Errf("usage: nominatim-ctl [serve|import|config|healthcheck [host:port]]")
+		ctl.Errf("usage: nominatim-ctl [serve|import|reimport|replicate|config|healthcheck [host:port]]")
 		os.Exit(2)
 	}
 
-	// A stop requested by the orchestrator is a successful exit, whatever the
-	// interrupted child reported.
+	// A stop requested by the orchestrator is a successful exit for the
+	// long-running services, whatever the interrupted child reported. An
+	// interrupted import is not: it must never satisfy a
+	// service_completed_successfully dependency with a partial database.
 	if ctx.Err() != nil {
+		if (cmd == "import" || cmd == "reimport") && runErr != nil {
+			return fmt.Errorf("import interrupted before completion: %w", runErr)
+		}
 		ctl.Logf("shutdown complete")
 		return nil
 	}

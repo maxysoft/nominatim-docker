@@ -7,3 +7,6 @@ contrib/.env
 
 # Container logs captured for debugging.
 *.log
+
+# Working-tree snapshots taken during risky changes; see .rollback/README.md.
+.rollback/

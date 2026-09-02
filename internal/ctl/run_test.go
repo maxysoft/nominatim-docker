@@ -34,3 +34,19 @@ func TestServeOnlyImageGuards(t *testing.T) {
 		t.Fatalf("startReplication = (%v, %v), want clean skip", cmd, err)
 	}
 }
+
+// The foreground updater refuses, before touching the database, when it has
+// no URL, when the database is frozen, or when osm2pgsql is missing.
+func TestReplicateGuards(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	cases := map[string]*Config{
+		"REPLICATION_URL": {},
+		"FREEZE":          {ReplicationURL: "https://example.invalid/updates", Freeze: true},
+		"serve-only":      {ReplicationURL: "https://example.invalid/updates"},
+	}
+	for want, c := range cases {
+		if err := Replicate(context.Background(), c); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("Replicate = %v, want an error mentioning %q", err, want)
+		}
+	}
+}

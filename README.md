@@ -46,6 +46,13 @@ For production deployments with caching, use the Varnish-enabled configuration:
 docker compose -f contrib/docker-compose-varnish.yml up
 ```
 
+Every compose file runs three containers: a one-shot import (full image), the API on the serve-only
+image with no import tooling and no admin credentials, and an optional updater:
+
+```sh
+docker compose -f contrib/docker-compose.yml --profile updates up -d
+```
+
 Or see [EXTERNAL-POSTGIS.md](docs/EXTERNAL-POSTGIS.md) for complete setup instructions with custom configurations.
 
 After the import is complete, you can access the Nominatim API at `http://localhost:8080/search.php?q=avenue%20pasteur` (or `http://localhost/search.php?q=avenue%20pasteur` when using the Varnish configuration).

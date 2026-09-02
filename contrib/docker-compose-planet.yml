@@ -1,9 +1,20 @@
 # For a full planet instance, we apply some best practices from the documentation (like using a flatnode file).
 # This compose file uses bind mounts, so it'll reference /data. You can either also mount the storage (for DB + flat node file) under /data or change it.
+# Flatnode storage is enabled by creating /data/nominatim/flatnode before the import.
 # Minimum specification for a machine running the import (if this succeeded on a lower spec machine, please contribute them):
 # - 16 core CPU (set THREADS variable to number of cores/threads available)
 # - 64GB RAM
 # - 1.5TB (NVMe) SSD storage
+#
+# Three nominatim-ctl containers: nominatim-import (full image) provisions the
+# database, imports and exits; nominatim (serve image) runs the API with no
+# import tooling and no admin credentials; nominatim-updater (full image, the
+# only one with osm2pgsql) applies replication diffs when started with
+# --profile updates. Re-running `up` is safe: the import container finds the
+# completed import and exits. To import a newer extract into the same database
+# (the API errors until it finishes):
+#
+#   docker compose -f contrib/docker-compose-planet.yml run --rm nominatim-import reimport
 
 x-logging: &logging
   logging:
@@ -11,6 +22,48 @@ x-logging: &logging
     options:
       max-size: 10m
       max-file: "3"
+
+# Hardening shared by every nominatim-ctl container. No setuid binary remains
+# in the image, so privilege escalation can be blocked outright; the retained
+# capabilities are what the entrypoint needs to take ownership of the volume
+# and drop to the unprivileged user (KILL: it runs as uid 0 and signals
+# children forked as uid 1000, which the kernel otherwise denies). Nothing
+# outside /nominatim (volume), /tmp and $HOME (tmpfs) and /dev/shm is ever
+# written, so the root filesystem can be immutable. init reaps orphaned
+# processes; the entrypoint deliberately does not.
+x-nominatim: &nominatim
+  init: true
+  security_opt:
+    - no-new-privileges:true
+  read_only: true
+  tmpfs:
+    - /tmp
+    - /var/lib/nominatim
+  cap_drop:
+    - ALL
+  cap_add:
+    - KILL
+    - CHOWN
+    - DAC_OVERRIDE
+    - FOWNER
+    - SETUID
+    - SETGID
+  networks:
+    - nominatim-net
+  <<: *logging
+
+# Database connection shared by every nominatim-ctl container.
+x-database: &database
+  POSTGRES_HOST: nominatim-postgres
+  POSTGRES_PORT: 5432
+  POSTGRES_DB: nominatim
+  NOMINATIM_PASSWORD: ${NOMINATIM_PASSWORD:?set NOMINATIM_PASSWORD in .env}
+
+# Import and updater share the project volume (the updater needs the flatnode
+# file the import wrote), so every setting either of them writes into .env
+# must be identical for both. Keep such settings here.
+x-replication: &replication
+  REPLICATION_URL: https://ftp5.gwdg.de/pub/misc/openstreetmap/planet.openstreetmap.org/replication/day/
 
 services:
   nominatim-postgres:
@@ -46,54 +99,72 @@ services:
     networks:
       - nominatim-net
 
-  nominatim:
+  # Runs once: provisions roles and extensions, imports, records completion.
+  # The image healthcheck probes the API, which this container never runs.
+  nominatim-import:
+    <<: *nominatim
     image: ghcr.io/maxysoft/nominatim-docker:latest
+    container_name: nominatim-import
+    command: import
+    restart: "no"
+    healthcheck:
+      disable: true
+    environment:
+      <<: [*database, *replication]
+      POSTGRES_ADMIN_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:?set POSTGRES_ADMIN_PASSWORD in .env}
+      # https://ftp5.gwdg.de/pub/misc/openstreetmap/planet.openstreetmap.org/pbf/planet-latest.osm.pbf returns 404.
+      # Use a specific dated version:
+      PBF_URL: https://ftp5.gwdg.de/pub/misc/openstreetmap/planet.openstreetmap.org/pbf/planet-250317.osm.pbf
+      IMPORT_WIKIPEDIA: "true"
+      IMPORT_US_POSTCODES: "true"
+      IMPORT_GB_POSTCODES: "true"
+      THREADS: 16
+    volumes:
+      - type: bind
+        source: /data/nominatim
+        target: /nominatim
+    depends_on:
+      nominatim-postgres:
+        condition: service_healthy
+
+  # The API, on the serve image: no osm2pgsql, no psql, no admin credentials.
+  # Its own project volume: sharing the import's would overwrite the .env the
+  # updater reads with one lacking the replication settings.
+  nominatim:
+    <<: *nominatim
+    image: ghcr.io/maxysoft/nominatim-docker:serve
     container_name: nominatim
     hostname: nominatim
     restart: unless-stopped
     ports:
       - "8080:8080"
     environment:
-      # External database configuration
-      POSTGRES_HOST: nominatim-postgres
-      POSTGRES_PORT: 5432
-      POSTGRES_DB: nominatim
-      NOMINATIM_PASSWORD: ${NOMINATIM_PASSWORD:?set NOMINATIM_PASSWORD in .env}
-      POSTGRES_ADMIN_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:?set POSTGRES_ADMIN_PASSWORD in .env}
+      <<: *database
+    volumes:
+      - nominatim-serve-data:/nominatim
+    depends_on:
+      nominatim-postgres:
+        condition: service_healthy
+        restart: true
+      nominatim-import:
+        condition: service_completed_successfully
 
-      # Planet-specific Nominatim configuration
-      # https://ftp5.gwdg.de/pub/misc/openstreetmap/planet.openstreetmap.org/pbf/planet-latest.osm.pbf returns 404.
-      # Use a specific dated version:
-      PBF_URL: https://ftp5.gwdg.de/pub/misc/openstreetmap/planet.openstreetmap.org/pbf/planet-250317.osm.pbf
-      REPLICATION_URL: https://ftp5.gwdg.de/pub/misc/openstreetmap/planet.openstreetmap.org/replication/day/
-      IMPORT_WIKIPEDIA: "true"
-      IMPORT_US_POSTCODES: "true"
-      IMPORT_GB_POSTCODES: "true"
-      THREADS: 16
-    # No setuid binary remains in the image, so privilege escalation can be
-    # blocked outright. The retained capabilities are what the entrypoint needs
-    # to take ownership of the volume and drop to the unprivileged user.
-    # Reap orphaned processes; the entrypoint deliberately does not.
-    init: true
-    security_opt:
-      - no-new-privileges:true
-    # Nothing outside /nominatim (volume), /tmp and $HOME (tmpfs below), and
-    # /dev/shm is ever written, so the root filesystem can be immutable.
-    read_only: true
-    tmpfs:
-      - /tmp
-      - /var/lib/nominatim
-    cap_drop:
-      - ALL
-    cap_add:
-      # KILL is required: the entrypoint runs as uid 0 and signals children it
-      # forked as uid 1000, which the kernel otherwise denies (EPERM).
-      - KILL
-      - CHOWN
-      - DAC_OVERRIDE
-      - FOWNER
-      - SETUID
-      - SETGID
+  # Optional: applies diffs from REPLICATION_URL. Start with --profile updates.
+  # on-failure, not unless-stopped: UPDATE_MODE=once or catch-up exit 0 when
+  # done and must stay stopped; continuous never exits 0 on its own.
+  nominatim-updater:
+    <<: *nominatim
+    profiles:
+      - updates
+    image: ghcr.io/maxysoft/nominatim-docker:latest
+    container_name: nominatim-updater
+    command: replicate
+    restart: on-failure
+    healthcheck:
+      disable: true
+    environment:
+      <<: [*database, *replication]
+      UPDATE_MODE: continuous
     volumes:
       - type: bind
         source: /data/nominatim
@@ -102,9 +173,11 @@ services:
       nominatim-postgres:
         condition: service_healthy
         restart: true
-    <<: *logging
-    networks:
-      - nominatim-net
+      nominatim-import:
+        condition: service_completed_successfully
+
+volumes:
+  nominatim-serve-data:
 
 networks:
   nominatim-net:

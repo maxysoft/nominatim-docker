@@ -5,7 +5,7 @@
 #
 # Usage: test/integration.sh [scenario ...]
 # Scenarios: full security restart volume_loss serve_image shutdown failfast
-#            unicode_password
+#            unicode_password split
 
 set -euo pipefail
 
@@ -16,6 +16,12 @@ COMPOSE="docker compose -f test/docker-compose.test.yml"
 ITEST_PORT="${ITEST_PORT:-18080}"
 export ITEST_PORT
 BASE_URL="http://127.0.0.1:${ITEST_PORT}"
+# The shipped local stack (one-shot import, serve-only API, updater), run under
+# its own project so it cannot collide with a developer's copy.
+SPLIT="docker compose -f contrib/docker-compose-local.yml -p nominatim-itest-split --profile updates"
+# Its interpolation requires these; exported once so the EXIT trap can tear
+# the stack down as well.
+export NOMINATIM_PORT=$((ITEST_PORT + 2)) NOMINATIM_PASSWORD=itest-nominatim-password POSTGRES_ADMIN_PASSWORD=itest-admin-password
 IMAGE="nominatim-itest:local"
 
 pass=0
@@ -29,6 +35,7 @@ cleanup() {
   docker rm -f itest-serve >/dev/null 2>&1 || true
   docker volume rm -f nominatim-itest-serve >/dev/null 2>&1 || true
   $COMPOSE down --volumes --remove-orphans >/dev/null 2>&1 || true
+  $SPLIT down --volumes --remove-orphans >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
@@ -49,6 +56,24 @@ wait_for_api() {
   log "timed out waiting for the API"
   $COMPOSE logs --tail 60 nominatim
   return 1
+}
+
+# wait_for_exit CONTAINER SECONDS prints the container's exit code, or "timeout".
+wait_for_exit() {
+  [[ -z "$1" ]] && { echo missing; return; }
+  timeout "$2" docker wait "$1" 2>/dev/null || echo timeout
+}
+
+# logs_contain main|split SERVICE PATTERN. The log is captured first: piping
+# `docker compose logs` into `grep -q` trips pipefail with SIGPIPE (rc 141)
+# whenever grep matches early.
+logs_contain() {
+  local out
+  case $1 in
+    main) out=$($COMPOSE logs "$2" 2>/dev/null) ;;
+    split) out=$($SPLIT logs "$2" 2>/dev/null) ;;
+  esac
+  grep -q -- "$3" <<<"$out"
 }
 
 # assert_json_nonempty URL DESCRIPTION
@@ -213,7 +238,7 @@ scenario_restart() {
   # `docker compose logs` being able to read it back.
   local found=0
   for _ in $(seq 1 30); do
-    if $COMPOSE logs nominatim 2>/dev/null | grep -q 'skipping import'; then
+    if logs_contain main nominatim 'skipping import'; then
       found=1
       break
     fi
@@ -402,17 +427,100 @@ scenario_unicode_password() {
   fi
 
   # And the cleartext must not be in the logs.
-  if $COMPOSE logs nominatim 2>&1 | grep -q 'wörd'; then
+  if logs_contain main nominatim 'wörd'; then
     bad "cleartext password appeared in the container log"
   else
     ok "password absent from the container log"
   fi
 }
 
+# The split deployment: a one-shot import on the full image, the API on the
+# serve image with no admin credentials, idempotent re-runs, and the updater.
+scenario_split() {
+  log "scenario: split deployment (contrib/docker-compose-local.yml)"
+  $SPLIT down --volumes --remove-orphans >/dev/null 2>&1 || true
+  local url="http://127.0.0.1:${NOMINATIM_PORT}"
+
+  local out code
+  if ! out=$($SPLIT up -d --build nominatim-import 2>&1); then
+    bad "compose could not start the import service: ${out: -300}"
+    return
+  fi
+  code=$(wait_for_exit "$($SPLIT ps -aq nominatim-import)" 1500)
+  if [[ "$code" == "0" ]] && logs_contain split nominatim-import 'running import'; then
+    ok "one-shot import exited 0 after importing"
+  else
+    bad "import container exit code $code"
+    $SPLIT logs --tail 40 nominatim-import
+    return
+  fi
+  # The API depends on service_completed_successfully, now satisfied.
+  $SPLIT up -d nominatim >/dev/null 2>&1 || true
+
+  local ready=0
+  for _ in $(seq 1 60); do
+    if curl -fsS --max-time 5 "$url/status.php?format=json" >/dev/null 2>&1; then ready=1; break; fi
+    sleep 2
+  done
+  if [[ $ready -eq 1 ]]; then
+    ok "serve-only API answers"
+  else
+    bad "serve-only API never became ready"
+    $SPLIT logs --tail 30 nominatim
+    return
+  fi
+
+  if $SPLIT exec -T nominatim sh -c 'command -v osm2pgsql || command -v psql' >/dev/null 2>&1; then
+    bad "API container ships import tooling"
+  else
+    ok "API container has no osm2pgsql or psql"
+  fi
+  # shellcheck disable=SC2016  # must expand in the container's shell, not here
+  if $SPLIT exec -T nominatim sh -c 'test -z "$POSTGRES_ADMIN_PASSWORD"'; then
+    ok "API container holds no admin password"
+  else
+    bad "POSTGRES_ADMIN_PASSWORD present in the API container"
+  fi
+
+  # A second `up` re-runs the one-shot service; it must skip, not refuse.
+  local before after
+  before=$($SPLIT exec -T nominatim-postgres psql -U postgres -d nominatim -tAc "SELECT count(*) FROM placex" 2>/dev/null | tr -d '[:space:]' || true)
+  $SPLIT up -d nominatim-import >/dev/null 2>&1 || true
+  code=$(wait_for_exit "$($SPLIT ps -aq nominatim-import)" 300)
+  if [[ "$code" == "0" ]] && logs_contain split nominatim-import 'skipping import'; then
+    ok "re-running the import service skips the completed import"
+  else
+    bad "second import run did not skip (exit $code)"
+    $SPLIT logs --tail 20 nominatim-import
+  fi
+  after=$($SPLIT exec -T nominatim-postgres psql -U postgres -d nominatim -tAc "SELECT count(*) FROM placex" 2>/dev/null | tr -d '[:space:]' || true)
+  if [[ -n "$before" && "$before" == "$after" ]]; then
+    ok "database untouched by the re-run ($before rows)"
+  else
+    bad "placex changed across the re-run: $before -> $after"
+  fi
+
+  # The updater must initialise replication and keep running.
+  $SPLIT up -d nominatim-updater >/dev/null 2>&1 || true
+  local started=0
+  for _ in $(seq 1 45); do
+    if logs_contain split nominatim-updater 'starting replication'; then started=1; break; fi
+    sleep 2
+  done
+  if [[ $started -eq 1 ]] && $SPLIT ps --status running --services 2>/dev/null | grep -q '^nominatim-updater$'; then
+    ok "updater initialised replication and is running"
+  else
+    bad "updater did not start replication"
+    $SPLIT logs --tail 30 nominatim-updater
+  fi
+
+  $SPLIT down --volumes --remove-orphans >/dev/null 2>&1 || true
+}
+
 main() {
   local scenarios=("$@")
   if [[ ${#scenarios[@]} -eq 0 ]]; then
-    scenarios=(full security restart volume_loss serve_image shutdown failfast unicode_password)
+    scenarios=(full security restart volume_loss serve_image shutdown failfast unicode_password split)
   fi
 
   build_image

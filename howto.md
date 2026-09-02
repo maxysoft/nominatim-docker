@@ -181,7 +181,9 @@ Full documentation for Nominatim update is available her: [Nominatim documentati
 docker exec -it -u nominatim nominatim nominatim replication --help
 ```
 
-The following command will keep updating the database forever:
+With the shipped compose files updates run in their own container: `docker compose -f contrib/docker-compose.yml --profile updates up -d` starts `nominatim-updater`, which runs `nominatim-ctl replicate` on the full image: it initialises replication and applies diffs continuously. `UPDATE_MODE=once` or `catch-up` make that container exit when it is done.
+
+For a single full-image container, the following command will keep updating the database forever:
 
 ```sh
 docker exec -it -u nominatim nominatim nominatim replication --project-dir /nominatim
@@ -240,6 +242,8 @@ docker run -it \
 ## Docker Compose
 
 In addition, we also provide a basic `contrib/docker-compose.yml` template which you use as a starting point and adapt to your needs. Use this template to set the environment variables, mounts, etc. as needed.
+
+Every template runs Nominatim as three containers: `nominatim-import` (full image) provisions the database, imports and exits; `nominatim` (serve image) runs the API with no import tooling and no admin credentials; `nominatim-updater` (full image, `--profile updates`) applies replication diffs. Re-running `up` is safe: the import container finds the completed import and exits. To import a newer extract into the same database run `docker compose -f contrib/docker-compose.yml run --rm nominatim-import reimport`.
 
 Besides the basic docker-compose.yml, there are also some advanced YAML configurations available in the `contrib` folder.
 These files follow the naming convention of `docker-compose-*.yml` and contain comments about the specific use case.

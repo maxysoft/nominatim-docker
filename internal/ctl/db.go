@@ -123,6 +123,22 @@ func ensureRole(ctx context.Context, conn *pgx.Conn, role, password string, extr
 	return nil
 }
 
+// reconcileRoles creates or updates the application and web roles at url so
+// their passwords and attributes match the environment: a rotated password
+// takes effect the next time a container holding the admin credentials starts.
+func reconcileRoles(ctx context.Context, c *Config, url string) error {
+	conn, err := pgx.Connect(ctx, url)
+	if err != nil {
+		return err
+	}
+	defer conn.Close(ctx)
+	// CREATEDB is all the import needs once PostGIS is pre-installed.
+	if err := ensureRole(ctx, conn, "nominatim", c.NominatimPassword, c.RoleOptions); err != nil {
+		return err
+	}
+	return ensureRole(ctx, conn, c.WebUser, c.WebUserPassword, "")
+}
+
 // hasNominatimData reports whether the connected database holds imported
 // tables; see importMarker for why this alone is not a completion signal.
 func hasNominatimData(ctx context.Context, conn *pgx.Conn) bool {

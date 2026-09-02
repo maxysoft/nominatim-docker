@@ -7,7 +7,9 @@ This Docker Compose configuration provides a production-ready setup for Nominati
 The `docker-compose-varnish.yml` configuration includes:
 
 - PostgreSQL with PostGIS (internal, not exposed)
-- Nominatim API server (internal, not exposed)
+- A one-shot Nominatim import container (full image; provisions and imports, then exits)
+- Nominatim API server on the serve-only image (internal, not exposed; no import tooling, no admin credentials)
+- An optional replication updater (full image; `--profile updates`)
 - Varnish 8 cache server (exposed on port 80)
 
 ## Key Features
