@@ -45,8 +45,7 @@ func waitForDatabase(ctx context.Context, url string, attempts int, delay time.D
 			conn.Close(ctx)
 			return nil
 		}
-		// A rejected password is final; waiting out the budget would only
-		// delay the same error by five minutes.
+		// A rejected password is final; retrying only delays the same error.
 		if isAuthError(err) {
 			return fmt.Errorf("PostgreSQL rejected the credentials: %w", err)
 		}
@@ -58,9 +57,8 @@ func waitForDatabase(ctx context.Context, url string, attempts int, delay time.D
 	return fmt.Errorf("PostgreSQL not reachable after %d attempts: %w", attempts, last)
 }
 
-// isAuthError reports a SQLSTATE class 28 (invalid authorization) failure.
-// A server that is still starting up reports 57P03 and a refused connection is
-// not a PgError at all, so both keep retrying.
+// isAuthError reports SQLSTATE class 28 (invalid authorization). Startup (57P03)
+// and refused connections keep retrying.
 func isAuthError(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && strings.HasPrefix(pgErr.Code, "28")
@@ -123,9 +121,8 @@ func ensureRole(ctx context.Context, conn *pgx.Conn, role, password string, extr
 	return nil
 }
 
-// reconcileRoles creates or updates the application and web roles at url so
-// their passwords and attributes match the environment: a rotated password
-// takes effect the next time a container holding the admin credentials starts.
+// reconcileRoles creates or updates the application and web roles at url, so a
+// rotated password takes effect on the next start.
 func reconcileRoles(ctx context.Context, c *Config, url string) error {
 	conn, err := pgx.Connect(ctx, url)
 	if err != nil {

@@ -61,15 +61,11 @@ func run() error {
 			return err
 		}
 		if cmd == "reimport" {
-			// The explicit, one-shot "drop and import again", meant for
-			// `compose run --rm nominatim-import reimport`. A persistent
-			// environment switch would fire on every `compose up`.
+			// One-shot "drop and import again" (compose run --rm nominatim-import reimport).
 			c.AllowDropExistingDB = true
 			runErr = ctl.RunImport(ctx, c, r)
 		} else {
-			// The decision serve makes: skip a completed import, adopt or
-			// reject a partial one, import an empty database, so a one-shot
-			// import service can be re-run on every `compose up`.
+			// Same decision as serve, so a one-shot import service can be re-run on every up.
 			runErr = ctl.EnsureImported(ctx, c, r)
 		}
 	case "replicate":
@@ -82,10 +78,8 @@ func run() error {
 		os.Exit(2)
 	}
 
-	// A stop requested by the orchestrator is a successful exit for the
-	// long-running services, whatever the interrupted child reported. An
-	// interrupted import is not: it must never satisfy a
-	// service_completed_successfully dependency with a partial database.
+	// A stop is a clean exit for the long-running services. Not for an import:
+	// a partial database must not satisfy service_completed_successfully.
 	if ctx.Err() != nil {
 		if (cmd == "import" || cmd == "reimport") && runErr != nil {
 			return fmt.Errorf("import interrupted before completion: %w", runErr)

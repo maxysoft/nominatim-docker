@@ -16,11 +16,9 @@ COMPOSE="docker compose -f test/docker-compose.test.yml"
 ITEST_PORT="${ITEST_PORT:-18080}"
 export ITEST_PORT
 BASE_URL="http://127.0.0.1:${ITEST_PORT}"
-# The shipped local stack (one-shot import, serve-only API, updater), run under
-# its own project so it cannot collide with a developer's copy.
+# The shipped local stack, under its own project so it cannot collide with a developer's copy.
 SPLIT="docker compose -f contrib/docker-compose-local.yml -p nominatim-itest-split --profile updates"
-# Its interpolation requires these; exported once so the EXIT trap can tear
-# the stack down as well.
+# Exported once so the EXIT trap can interpolate the compose file too.
 export NOMINATIM_PORT=$((ITEST_PORT + 2)) NOMINATIM_PASSWORD=itest-nominatim-password POSTGRES_ADMIN_PASSWORD=itest-admin-password
 IMAGE="nominatim-itest:local"
 
@@ -64,9 +62,8 @@ wait_for_exit() {
   timeout "$2" docker wait "$1" 2>/dev/null || echo timeout
 }
 
-# logs_contain main|split SERVICE PATTERN. The log is captured first: piping
-# `docker compose logs` into `grep -q` trips pipefail with SIGPIPE (rc 141)
-# whenever grep matches early.
+# logs_contain main|split SERVICE PATTERN. Captures first: piping into grep -q
+# trips pipefail (SIGPIPE, rc 141) when grep matches early.
 logs_contain() {
   local out
   case $1 in
@@ -394,8 +391,7 @@ scenario_failfast() {
     bad "invalid UPDATE_MODE accepted (rc=$rc): ${out:0:200}"
   fi
 
-  # A rejected password must fail within seconds, not after the five-minute
-  # connection budget. Needs a reachable server, so make sure one is up.
+  # A rejected password must fail in seconds, not after the connection budget.
   $COMPOSE up -d postgres >/dev/null 2>&1
   set +e
   out=$(timeout 90 docker run --rm --network nominatim-itest_default \
@@ -434,8 +430,8 @@ scenario_unicode_password() {
   fi
 }
 
-# The split deployment: a one-shot import on the full image, the API on the
-# serve image with no admin credentials, idempotent re-runs, and the updater.
+# One-shot import on the full image, serve-only API without admin credentials,
+# idempotent re-runs, updater.
 scenario_split() {
   log "scenario: split deployment (contrib/docker-compose-local.yml)"
   $SPLIT down --volumes --remove-orphans >/dev/null 2>&1 || true

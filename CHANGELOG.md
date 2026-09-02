@@ -166,6 +166,10 @@ Import tuning, from analysing a real Italy import log:
   too, and a quota below two CPUs yields 2 rather than 1.
 - **Changed:** Base image bumped to `debian:13.6-slim` and every `postgis/postgis:18-3.6-alpine` pin
   refreshed to the digest the tag currently resolves to; both pinned by index digest.
+- **Changed:** CI actions bumped to their latest releases (checkout v7.0.1, build-push-action v7.3.0,
+  login-action v4.6.0, setup-buildx-action v4.3.0), still pinned by commit; the static-analysis job
+  runs `make vet test fmt-check` in the pinned Go image instead of `actions/setup-go`; the shellcheck
+  and hadolint images are pinned by version and digest.
 - **Security:** The build no longer runs `pip install --upgrade pip setuptools wheel`, which fetched
   unpinned packages from PyPI; Debian's pip installs the hash-checked requirements and is then
   removed from the image. Dropped `libgl1` from the purge list (no longer installed).

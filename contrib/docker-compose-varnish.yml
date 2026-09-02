@@ -1,10 +1,7 @@
-# Three nominatim-ctl containers: nominatim-import (full image) provisions the
-# database, imports and exits; nominatim (serve image) runs the API with no
-# import tooling and no admin credentials; nominatim-updater (full image, the
-# only one with osm2pgsql) applies replication diffs when started with
-# --profile updates. Re-running `up` is safe: the import container finds the
-# completed import and exits. To import a newer extract into the same database
-# (the API errors until it finishes):
+# nominatim-import (full image) provisions and imports, then exits; nominatim
+# (serve image) runs the API with no import tooling or admin credentials;
+# nominatim-updater (--profile updates) applies replication diffs. Re-running
+# `up` is safe. To import a newer extract into the same database:
 #
 #   docker compose -f contrib/docker-compose-varnish.yml run --rm nominatim-import reimport
 #
@@ -18,14 +15,10 @@ x-logging: &logging
       max-size: 10m
       max-file: "3"
 
-# Hardening shared by every nominatim-ctl container. No setuid binary remains
-# in the image, so privilege escalation can be blocked outright; the retained
-# capabilities are what the entrypoint needs to take ownership of the volume
-# and drop to the unprivileged user (KILL: it runs as uid 0 and signals
-# children forked as uid 1000, which the kernel otherwise denies). Nothing
-# outside /nominatim (volume), /tmp and $HOME (tmpfs) and /dev/shm is ever
-# written, so the root filesystem can be immutable. init reaps orphaned
-# processes; the entrypoint deliberately does not.
+# Hardening shared by every nominatim-ctl container: no setuid binaries remain,
+# so privilege escalation is blocked; the capabilities are what the entrypoint
+# needs to own the volume, drop privileges and signal its children; only
+# /nominatim, /tmp, $HOME (tmpfs) and /dev/shm are written.
 x-nominatim: &nominatim
   init: true
   security_opt:
@@ -54,9 +47,7 @@ x-database: &database
   POSTGRES_DB: nominatim
   NOMINATIM_PASSWORD: ${NOMINATIM_PASSWORD:?set NOMINATIM_PASSWORD in .env}
 
-# Import and updater share the project volume (the updater needs the flatnode
-# file the import wrote), so every setting either of them writes into .env
-# must be identical for both. Keep such settings here.
+# Shared by import and updater: both write it into the .env on their common volume.
 x-replication: &replication
   REPLICATION_URL: https://download.geofabrik.de/europe/monaco-updates/
 
@@ -93,8 +84,7 @@ services:
     networks:
       - nominatim-net
 
-  # Runs once: provisions roles and extensions, imports, records completion.
-  # The image healthcheck probes the API, which this container never runs.
+  # Runs once. The image healthcheck probes the API, which this container never runs.
   nominatim-import:
     <<: *nominatim
     image: ghcr.io/maxysoft/nominatim-docker:latest
@@ -120,9 +110,8 @@ services:
       nominatim-postgres:
         condition: service_healthy
 
-  # The API, on the serve image: no osm2pgsql, no psql, no admin credentials.
-  # Its own project volume: sharing the import's would overwrite the .env the
-  # updater reads with one lacking the replication settings.
+  # Serve image: no osm2pgsql, no psql, no admin credentials. Own volume: it
+  # would otherwise overwrite the .env the updater reads.
   nominatim:
     <<: *nominatim
     image: ghcr.io/maxysoft/nominatim-docker:serve
@@ -140,9 +129,7 @@ services:
       nominatim-import:
         condition: service_completed_successfully
 
-  # Optional: applies diffs from REPLICATION_URL. Start with --profile updates.
-  # on-failure, not unless-stopped: UPDATE_MODE=once or catch-up exit 0 when
-  # done and must stay stopped; continuous never exits 0 on its own.
+  # Optional (--profile updates). on-failure: once/catch-up exit 0 when done.
   nominatim-updater:
     <<: *nominatim
     profiles:

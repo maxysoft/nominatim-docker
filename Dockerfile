@@ -2,13 +2,10 @@
 ARG NOMINATIM_VERSION=5.3.2
 ARG USER_AGENT=maxysoft/nominatim-docker:${NOMINATIM_VERSION}
 
-# Pinned by digest so a mutated tag can never change the base image.
-# To upgrade: docker buildx imagetools inspect debian:<version>-slim, copy the
-# index digest, update here and BASE_IMAGE in the Makefile.
+# Pinned by digest so a mutated tag can never change the base image. Upgrade:
+# docker buildx imagetools inspect debian:<v>-slim; update here and the Makefile.
 ARG BASE_IMAGE=debian:13.6-slim@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b6259bc132
-# Pinned by digest like the base image. To upgrade: docker buildx imagetools
-# inspect golang:<version>-bookworm, copy the index digest, update here, in the
-# Makefile and in .github/workflows/ci.yml.
+# Pinned by digest like the base image; the Makefile uses the same reference.
 ARG GO_IMAGE=golang:1.27.1-bookworm@sha256:648f440f42a0958804efb24df176f806f9d353b41f1c0627f666428e40310f6b
 
 # Fixed IDs so a rebuilt image keeps working with existing data volumes.
@@ -53,10 +50,8 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         python3-icu \
         python3-venv
 
-# Debian's venv seeds pip from python3-pip-whl. It is not upgraded (that was
-# the one unpinned download in the build) and is removed once the pinned,
-# hash-checked requirements are installed: the runtime image has no use for a
-# package installer.
+# Debian's pip installs the hash-checked requirements and is then removed: no
+# upgrade (an unpinned download), no installer in the runtime image.
 COPY requirements.txt /tmp/requirements.txt
 RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
     python3 -m venv --system-site-packages /opt/nominatim \
@@ -66,11 +61,9 @@ RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
 
 
 # ---------------------------------------------------------------------------
-# Stage 3, serve-base: what the long-running API container needs, nothing
-# more. osm2pgsql and postgresql-client live only in the full image; the
-# entrypoint refuses to import or replicate without them. The entrypoint
-# binary itself is copied in the final stages below, as their last layer, so
-# a Go change never re-runs an apt layer.
+# Stage 3, serve-base: everything the API container needs except the entrypoint
+# binary, which the final stages copy as their last layer so a Go change never
+# re-runs an apt layer. osm2pgsql and psql live only in the full image.
 # ---------------------------------------------------------------------------
 FROM ${BASE_IMAGE} AS serve-base
 

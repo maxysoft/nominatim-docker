@@ -15,24 +15,26 @@ GO_RUN = docker run --rm -u $(UID):$(GID) \
 	-e GOMODCACHE=/gocache/mod -e GOCACHE=/gocache/build -e GOFLAGS=-mod=mod \
 	$(GO_IMAGE)
 
-.PHONY: help gocache tidy fmt vet test lint build requirements integration check clean
+.PHONY: help gocache tidy fmt fmt-check vet test lint build requirements integration check clean
 
 help:
 	@grep -hE '^[a-z-]+:.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | column -t -s "$$(printf '\t')"
 
-# A fresh named volume is root-owned, and the toolchain runs as the invoking
-# user so files it writes into the checkout keep host ownership.
+# Fresh named volumes are root-owned; the toolchain runs as the invoking user.
 gocache:
 	docker run --rm -v nominatim-gocache-mod:/gocache/mod -v nominatim-gocache-build:/gocache/build \
 		$(GO_IMAGE) chown $(UID):$(GID) /gocache/mod /gocache/build
 
-tidy fmt vet test: gocache
+tidy fmt fmt-check vet test: gocache
 
 tidy: ## Resolve module dependencies and write go.sum
 	$(GO_RUN) go mod tidy
 
 fmt: ## Format Go sources
 	$(GO_RUN) gofmt -l -w ./cmd ./internal
+
+fmt-check: ## Fail if any Go source is not gofmt-clean
+	$(GO_RUN) sh -c 'gofmt -l ./cmd ./internal | tee /dev/stderr | (! read -r _)'
 
 vet: ## Run go vet
 	$(GO_RUN) go vet ./...
@@ -41,8 +43,8 @@ test: ## Run Go unit tests
 	$(GO_RUN) go test -count=1 ./...
 
 lint: ## Shell and Dockerfile linting
-	docker run --rm -v $(CURDIR):/mnt -w /mnt koalaman/shellcheck:stable test/integration.sh   # default severity, same as CI
-	docker run --rm -i hadolint/hadolint < Dockerfile
+	docker run --rm -v $(CURDIR):/mnt -w /mnt koalaman/shellcheck:v0.11.0@sha256:61862eba1fcf09a484ebcc6feea46f1782532571a34ed51fedf90dd25f925a8d test/integration.sh   # default severity, same as CI
+	docker run --rm -i hadolint/hadolint:v2.15.1@sha256:32dac94127fd60b7b7e3fbfc65e1383b9b5e25c9bfd7b8536de7a539fe68a12d < Dockerfile
 
 build: ## Build the container image
 	DOCKER_BUILDKIT=1 docker build -t nominatim-docker:dev .
@@ -62,7 +64,7 @@ requirements: ## Regenerate requirements.txt with pinned versions and hashes
 integration: ## Full local integration test (builds the image, imports Monaco)
 	./test/integration.sh
 
-check: vet test ## Fast pre-commit gate
+check: vet test fmt-check ## Fast pre-commit gate
 
 clean:
 	docker volume rm -f nominatim-gocache-mod nominatim-gocache-build

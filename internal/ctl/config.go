@@ -146,9 +146,7 @@ func Load() (*Config, error) {
 		c.WebUserPassword = c.NominatimPassword
 	}
 
-	// Sized from the CPU allowance actually granted to this container: since
-	// Go 1.25 the runtime derives GOMAXPROCS from the cgroup CPU quota (rounded
-	// up, minimum 2), so `--cpus=2` on a 64-core host yields 2, not 64.
+	// Since Go 1.25 GOMAXPROCS follows the cgroup CPU quota (rounded up, minimum 2).
 	cpus := runtime.GOMAXPROCS(0)
 	if c.Threads, err = envInt("THREADS", cpus); err != nil {
 		return nil, err

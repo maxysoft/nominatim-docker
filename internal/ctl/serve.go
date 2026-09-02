@@ -33,9 +33,8 @@ func BaseEnv(c *Config) []string {
 		if !ok {
 			continue
 		}
-		// The DSN is owned by this process, and the role passwords must not
-		// reach a child: Gunicorn connects as the web role, and inheriting
-		// NOMINATIM_PASSWORD would hand it the CREATEDB role anyway.
+		// The DSN is owned by this process; the role passwords must not reach a
+		// child (Gunicorn connects as the web role).
 		switch k {
 		case "NOMINATIM_DATABASE_DSN", "NOMINATIM_PASSWORD", "NOMINATIM_WEBUSER_PASSWORD":
 			continue
@@ -146,10 +145,9 @@ func EnsureImported(ctx context.Context, c *Config, r *Runner) error {
 		return fmt.Errorf("%w\n(no POSTGRES_ADMIN_PASSWORD is set, so the database cannot be provisioned either)", err)
 	}
 
-	// settled finishes for a database confirmed to be ours. Only then are the
-	// roles reconciled: they are server-wide, and a container pointed at the
-	// wrong database must not rewrite their passwords. A failure is a warning,
-	// not an error: roles adopted from another installation lack our marker.
+	// settled finishes for a database confirmed ours. Roles are server-wide, so
+	// only then are they reconciled; failure is a warning (adopted roles lack
+	// our marker).
 	settled := func() error {
 		if haveAdmin {
 			if err := reconcileRoles(ctx, c, probeURL); err != nil {
@@ -265,11 +263,9 @@ func replicationArgs(c *Config) []string {
 	return args
 }
 
-// Replicate runs the replication process in the foreground: the updater
-// service of a split deployment, where the API runs on the serve image and
-// this container, on the full image, is the only one that ships osm2pgsql.
-// It exits with the process's status, so `once` and `catch-up` end the
-// container and the orchestrator's restart policy governs `continuous`.
+// Replicate runs replication in the foreground: the updater container of a
+// split deployment. `once` and `catch-up` exit when done; the restart policy
+// governs `continuous`.
 func Replicate(ctx context.Context, c *Config) error {
 	switch {
 	case c.ReplicationURL == "":
@@ -288,8 +284,8 @@ func Replicate(ctx context.Context, c *Config) error {
 		return err
 	}
 
-	// Probed through the maintenance database: the target may not exist yet,
-	// and that must read as "run the import first", not as a five-minute wait.
+	// Via the maintenance database: a missing target must say "import first",
+	// not wait five minutes.
 	probeURL := c.LibpqURL("nominatim", c.NominatimPassword, "postgres")
 	Logf("waiting for PostgreSQL at %s:%d", c.PostgresHost, c.PostgresPort)
 	if err := waitForDatabase(ctx, probeURL, 150, 2*time.Second); err != nil {
@@ -305,8 +301,7 @@ func Replicate(ctx context.Context, c *Config) error {
 		return fmt.Errorf("no completed Nominatim import in %q; run `nominatim-ctl import` first", c.PostgresDB)
 	}
 
-	// Unlike serve, an unreachable URL is an error here: this container has no
-	// other job, and exiting non-zero lets the restart policy retry.
+	// Unlike serve, unreachable is an error: exit non-zero, let the restart policy retry.
 	if !NewDownloader(c.UserAgent).Reachable(ctx, c.ReplicationURL, 3, 2*time.Second) {
 		return fmt.Errorf("REPLICATION_URL %s is unreachable", c.ReplicationURL)
 	}
