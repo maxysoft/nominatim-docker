@@ -1,0 +1,20 @@
+#!/bin/sh
+# Runs the image under test against the start-postgres database with the
+# settings every CI scenario shares. Scenario flags (-e, -v, -d) go first.
+# Each matrix leg has its own runner, so the names and port are fixed. No
+# --rm: the shutdown scenario inspects the exit code, the restart scenario
+# removes the container itself.
+#
+# Usage: run-nominatim [docker run flags ...]
+set -eu
+
+exec docker run -i --network nominatim-net --shm-size 1g \
+  -e POSTGRES_HOST=postgres \
+  -e POSTGRES_DB=nominatim \
+  -e NOMINATIM_PASSWORD=very_secure_password \
+  -e POSTGRES_ADMIN_PASSWORD=very_secure_password \
+  -v nominatim-data:/nominatim \
+  -p 8080:8080 \
+  --name nominatim \
+  "$@" \
+  "nominatim:$NOMINATIM_VERSION"

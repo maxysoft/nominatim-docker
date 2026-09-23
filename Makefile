@@ -3,8 +3,9 @@
 # Dependency and compiler caches are named volumes, otherwise each run
 # recompiles the world.
 
-GO_IMAGE   ?= golang:1.27.1-bookworm@sha256:648f440f42a0958804efb24df176f806f9d353b41f1c0627f666428e40310f6b
-BASE_IMAGE ?= debian:13.6-slim@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b6259bc132
+# The digest pins live once, in the Dockerfile.
+GO_IMAGE   ?= $(shell sed -n 's/^ARG GO_IMAGE=//p' Dockerfile)
+BASE_IMAGE ?= $(shell sed -n 's/^ARG BASE_IMAGE=//p' Dockerfile)
 UID        := $(shell id -u)
 GID        := $(shell id -g)
 
@@ -15,7 +16,7 @@ GO_RUN = docker run --rm -u $(UID):$(GID) \
 	-e GOMODCACHE=/gocache/mod -e GOCACHE=/gocache/build -e GOFLAGS=-mod=mod \
 	$(GO_IMAGE)
 
-.PHONY: help gocache tidy fmt fmt-check vet test lint build requirements integration check clean
+.PHONY: help gocache tidy fmt fmt-check vet test vuln lint build requirements integration check clean
 
 help:
 	@grep -hE '^[a-z-]+:.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | column -t -s "$$(printf '\t')"
@@ -25,7 +26,7 @@ gocache:
 	docker run --rm -v nominatim-gocache-mod:/gocache/mod -v nominatim-gocache-build:/gocache/build \
 		$(GO_IMAGE) chown $(UID):$(GID) /gocache/mod /gocache/build
 
-tidy fmt fmt-check vet test: gocache
+tidy fmt fmt-check vet test vuln: gocache
 
 tidy: ## Resolve module dependencies and write go.sum
 	$(GO_RUN) go mod tidy
@@ -42,8 +43,11 @@ vet: ## Run go vet
 test: ## Run Go unit tests
 	$(GO_RUN) go test -count=1 ./...
 
+vuln: ## Report known vulnerabilities reachable from the Go code
+	$(GO_RUN) go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
+
 lint: ## Shell and Dockerfile linting
-	docker run --rm -v $(CURDIR):/mnt -w /mnt koalaman/shellcheck:v0.11.0@sha256:61862eba1fcf09a484ebcc6feea46f1782532571a34ed51fedf90dd25f925a8d test/integration.sh   # default severity, same as CI
+	docker run --rm -v $(CURDIR):/mnt -w /mnt koalaman/shellcheck:v0.11.0@sha256:61862eba1fcf09a484ebcc6feea46f1782532571a34ed51fedf90dd25f925a8d test/integration.sh .github/workflows/start-postgres .github/workflows/run-nominatim .github/workflows/wait-log
 	docker run --rm -i hadolint/hadolint:v2.15.1@sha256:32dac94127fd60b7b7e3fbfc65e1383b9b5e25c9bfd7b8536de7a539fe68a12d < Dockerfile
 
 build: ## Build the container image
@@ -57,7 +61,7 @@ requirements: ## Regenerate requirements.txt with pinned versions and hashes
 		apt-get -qq install -y --no-install-recommends \
 			python3 python3-pip ca-certificates >/dev/null && \
 		pip install --quiet --break-system-packages --require-hashes --only-binary :all: -r requirements-tools.txt && \
-		uv pip compile --generate-hashes --no-header --no-emit-package pyicu \
+		uv pip compile --upgrade --generate-hashes --no-header --no-emit-package pyicu \
 			--output-file requirements.txt requirements.in && \
 		chown $(UID):$(GID) requirements.txt'
 

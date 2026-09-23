@@ -9,7 +9,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -49,9 +49,14 @@ func waitForDatabase(ctx context.Context, url string, attempts int, delay time.D
 		if isAuthError(err) {
 			return fmt.Errorf("PostgreSQL rejected the credentials: %w", err)
 		}
+		// So is a missing database: the server answered, and the caller
+		// decides what absence means.
+		if isMissingDatabase(err) {
+			return fmt.Errorf("PostgreSQL is reachable but the database is missing: %w", err)
+		}
 		last = err
 		if i == 0 || (i+1)%10 == 0 {
-			Logf("waiting for PostgreSQL (attempt %d/%d): %v", i+1, attempts, Redact(err.Error()))
+			Logf("waiting for PostgreSQL (attempt %d/%d): %v", i+1, attempts, err)
 		}
 	}
 	return fmt.Errorf("PostgreSQL not reachable after %d attempts: %w", attempts, last)
@@ -85,19 +90,33 @@ func databaseHasTables(ctx context.Context, url string) (bool, error) {
 		return false, err
 	}
 	defer conn.Close(ctx)
-	return hasUserTables(ctx, conn)
+	var present bool
+	err = conn.QueryRow(ctx, userTablesSQL).Scan(&present)
+	return present, err
 }
 
 // readImportMarker connects to url and reports whether dbname carries the
 // completion marker. The marker lives in pg_database, so a connection to the
 // maintenance database works even where pg_hba keeps the admin out of dbname.
+// A database left invalid by an interrupted DROP (datconnlimit -2, PostgreSQL
+// 16+) can keep its comment, so it never counts as complete.
 func readImportMarker(ctx context.Context, url, dbname string) (bool, error) {
 	conn, err := pgx.Connect(ctx, url)
 	if err != nil {
 		return false, err
 	}
 	defer conn.Close(ctx)
-	return importComplete(ctx, conn, dbname)
+	var comment *string
+	err = conn.QueryRow(ctx,
+		"SELECT shobj_description(oid, 'pg_database') FROM pg_database WHERE datname = $1 AND datconnlimit <> -2",
+		dbname).Scan(&comment)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return comment != nil && *comment == importMarker, nil
 }
 
 // ensureRole creates role if it is absent, and reconciles its password and
@@ -145,7 +164,8 @@ func ensureRole(ctx context.Context, conn *pgx.Conn, role, password string, extr
 	}
 
 	var comment *string
-	if err := conn.QueryRow(ctx, "SELECT shobj_description(oid, 'pg_authid') FROM pg_roles WHERE rolname = $1", role).Scan(&comment); err != nil {
+	var super bool
+	if err := conn.QueryRow(ctx, "SELECT shobj_description(oid, 'pg_authid'), rolsuper FROM pg_roles WHERE rolname = $1", role).Scan(&comment, &super); err != nil {
 		return fmt.Errorf("reading comment on role %q: %w", role, err)
 	}
 	if comment == nil || *comment != roleMarker {
@@ -159,12 +179,27 @@ func ensureRole(ctx context.Context, conn *pgx.Conn, role, password string, extr
 	}
 	// Reconcile attributes too, or NOMINATIM_ROLE_OPTIONS would only apply on
 	// the run that created the role.
-	if extraOptions != "" {
-		if _, err := conn.Exec(ctx, fmt.Sprintf("ALTER ROLE %s %s", ident, extraOptions)); err != nil {
-			return fmt.Errorf("applying options %q to role %q: %w", extraOptions, role, err)
+	opts := reconcileRoleOptions(extraOptions, super)
+	if opts != extraOptions {
+		Logf("revoking SUPERUSER from role %s: its options no longer grant it", role)
+	}
+	if opts != "" {
+		if _, err := conn.Exec(ctx, fmt.Sprintf("ALTER ROLE %s %s", ident, opts)); err != nil {
+			return fmt.Errorf("applying options %q to role %q: %w", opts, role, err)
 		}
 	}
 	return nil
+}
+
+// reconcileRoleOptions adds NOSUPERUSER when a role is a superuser that the
+// options no longer make one, so dropping SUPERUSER from NOMINATIM_ROLE_OPTIONS
+// takes effect. Only then: NOSUPERUSER itself needs superuser to issue.
+func reconcileRoleOptions(options string, isSuper bool) string {
+	if !isSuper || roleIsSuperuser(options) ||
+		slices.ContainsFunc(strings.Fields(options), func(o string) bool { return strings.EqualFold(o, "NOSUPERUSER") }) {
+		return options
+	}
+	return strings.TrimSpace("NOSUPERUSER " + options)
 }
 
 // reconcileRoles creates or updates the application and web roles at url, so a
@@ -179,7 +214,30 @@ func reconcileRoles(ctx context.Context, c *Config, url string) error {
 	if err := ensureRole(ctx, conn, "nominatim", c.NominatimPassword, c.RoleOptions); err != nil {
 		return err
 	}
+	// The same role twice would have its options reconciled away by the
+	// second, option-less call (SUPERUSER revoked).
+	if c.WebUser == "nominatim" {
+		return nil
+	}
 	return ensureRole(ctx, conn, c.WebUser, c.WebUserPassword, "")
+}
+
+// databaseState reports whether dbname is frozen, by Nominatim's own test (the
+// place table is gone after `nominatim freeze`), and whether the application
+// role owns it (an adopted database may belong to someone else).
+func databaseState(ctx context.Context, url, dbname string) (frozen, ownedByApp bool, err error) {
+	conn, err := pgx.Connect(ctx, url)
+	if err != nil {
+		return false, false, err
+	}
+	defer conn.Close(ctx)
+	err = conn.QueryRow(ctx,
+		"SELECT to_regclass('public.place') IS NULL, pg_get_userbyid(datdba) = 'nominatim' FROM pg_database WHERE datname = $1",
+		dbname).Scan(&frozen, &ownedByApp)
+	if err != nil {
+		return false, false, fmt.Errorf("inspecting database %q: %w", dbname, err)
+	}
+	return frozen, ownedByApp, nil
 }
 
 // userTablesSQL finds any relation that is not a system catalog and not owned
@@ -193,16 +251,6 @@ const userTablesSQL = `SELECT EXISTS (
 	  AND n.nspname NOT LIKE 'pg\_toast%' AND n.nspname NOT LIKE 'pg\_temp%'
 	  AND NOT EXISTS (SELECT 1 FROM pg_depend d
 	                  WHERE d.classid = 'pg_class'::regclass AND d.objid = c.oid AND d.deptype = 'e'))`
-
-// hasUserTables reports whether the connected database holds any data of its
-// own; see importMarker for why this alone is not a completion signal.
-func hasUserTables(ctx context.Context, conn *pgx.Conn) (bool, error) {
-	var present bool
-	if err := conn.QueryRow(ctx, userTablesSQL).Scan(&present); err != nil {
-		return false, fmt.Errorf("checking for existing tables: %w", err)
-	}
-	return present, nil
-}
 
 // dropDatabase removes dbname, refusing to touch a populated database unless
 // the operator explicitly opted in.
@@ -272,22 +320,6 @@ func provisionExtensions(ctx context.Context, conn *pgx.Conn) error {
 	return nil
 }
 
-// importComplete reports whether a finished import is recorded. Reads
-// pg_database, so any connection to the server will do.
-func importComplete(ctx context.Context, conn *pgx.Conn, dbname string) (bool, error) {
-	var comment *string
-	err := conn.QueryRow(ctx,
-		"SELECT shobj_description(oid, 'pg_database') FROM pg_database WHERE datname = $1",
-		dbname).Scan(&comment)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return false, nil
-	}
-	if err != nil {
-		return false, fmt.Errorf("reading the import marker of %q: %w", dbname, err)
-	}
-	return comment != nil && *comment == importMarker, nil
-}
-
 // markImportComplete records that the import finished. Requires ownership of
 // the database, which the application role has.
 func markImportComplete(ctx context.Context, conn *pgx.Conn, dbname string) error {
@@ -316,11 +348,6 @@ func QuoteLiteral(s string) string {
 func QuoteIdentifier(s string) string {
 	return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
 }
-
-// urlEscape percent-encodes a component of a postgres:// URL. QueryEscape is
-// wrong here: it encodes a space as "+", which the userinfo decoder does not
-// map back, so such a password would fail every login.
-func urlEscape(s string) string { return url.PathEscape(s) }
 
 // mustNotBeEmpty guards identifiers where an empty value would produce valid
 // but catastrophic SQL (e.g. DROP DATABASE "").

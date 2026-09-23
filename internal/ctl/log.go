@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 )
@@ -50,15 +51,11 @@ func Errf(format string, args ...any) {
 // line by line, so a traceback or driver error cannot echo a DSN into the
 // container log, even when a secret is split across Write calls.
 type RedactWriter struct {
-	W io.Writer
-
-	mu  sync.Mutex // writers are per-child today; the lock keeps sharing safe
+	W   io.Writer
 	buf []byte
 }
 
 func (r *RedactWriter) Write(p []byte) (int, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
 	r.buf = append(r.buf, p...)
 	for {
 		// Both terminators count: osm2pgsql reports progress with bare '\r',
@@ -89,21 +86,38 @@ func (r *RedactWriter) Write(p []byte) (int, error) {
 
 // Flush writes any trailing partial line.
 func (r *RedactWriter) Flush() {
-	r.mu.Lock()
-	defer r.mu.Unlock()
 	if len(r.buf) > 0 {
 		io.WriteString(r.W, Redact(string(r.buf)))
 		r.buf = r.buf[:0]
 	}
 }
 
-// RegisterURLSecrets masks passwords embedded in the configured URLs
-// (https://user:pass@mirror/...), which are logged on every download.
+// RegisterURLSecrets masks credentials embedded in the configured URLs, which
+// are logged on every download: a userinfo password (https://user:pass@...),
+// a bare userinfo token (https://TOKEN@...), and credential query values of
+// presigned or SAS URLs (X-Amz-Signature=, sig=, token=).
 func RegisterURLSecrets(c *Config) {
 	for _, raw := range []string{c.PBFURL, c.ReplicationURL, c.MirrorBaseURL} {
-		if u, err := url.Parse(raw); err == nil && u.User != nil {
-			if p, ok := u.User.Password(); ok {
-				RegisterSecret(p)
+		if u, err := url.Parse(raw); err == nil {
+			if u.User != nil {
+				if p, ok := u.User.Password(); ok {
+					RegisterSecret(p)
+				} else {
+					RegisterSecret(u.User.Username())
+				}
+			}
+			for _, kv := range strings.Split(u.RawQuery, "&") {
+				k, v, _ := strings.Cut(kv, "=")
+				// Short or flag-like values (host, true) would mask common words
+				// in every log line; real credentials are longer.
+				if !credentialParam(k) || len(v) < 8 {
+					continue
+				}
+				// Both forms, as for the userinfo below.
+				RegisterSecret(v)
+				if dec, err := url.QueryUnescape(v); err == nil {
+					RegisterSecret(dec)
+				}
 			}
 		}
 		// Logged as written, so the percent-encoded form must be masked too.
@@ -111,7 +125,16 @@ func RegisterURLSecrets(c *Config) {
 	}
 }
 
-// rawURLPassword returns the password of raw's userinfo exactly as written.
+// credentialParam reports whether a query key names a credential. Exact names:
+// a substring test would also catch X-Amz-SignedHeaders or passive.
+func credentialParam(key string) bool {
+	return slices.Contains([]string{"sig", "signature", "x-amz-signature", "x-amz-credential", "x-amz-security-token",
+		"x-goog-signature", "x-goog-credential", "token", "access_token", "api_key", "apikey", "key", "secret",
+		"password", "auth"}, strings.ToLower(key))
+}
+
+// rawURLPassword returns the secret half of raw's userinfo exactly as written:
+// the password, or the whole userinfo when it is a bare token.
 func rawURLPassword(raw string) string {
 	_, rest, ok := strings.Cut(raw, "://")
 	if !ok {
@@ -124,6 +147,9 @@ func rawURLPassword(raw string) string {
 	if at < 0 {
 		return ""
 	}
-	_, pw, _ := strings.Cut(rest[:at], ":")
+	user, pw, ok := strings.Cut(rest[:at], ":")
+	if !ok {
+		return user
+	}
 	return pw
 }

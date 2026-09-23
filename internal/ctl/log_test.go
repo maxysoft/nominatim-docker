@@ -27,24 +27,10 @@ func TestRedactIgnoresTinyValues(t *testing.T) {
 }
 
 // A Nominatim traceback or an osm2pgsql error can echo a DSN; child output is
-// filtered too, not just what the entrypoint logs itself.
-func TestRedactWriterMasksChildOutput(t *testing.T) {
-	RegisterSecret("child-secret-value")
-	var sink strings.Builder
-	w := &RedactWriter{W: &sink}
-
-	w.Write([]byte("connecting password=child-secret-value to db\n"))
-	if strings.Contains(sink.String(), "child-secret-value") {
-		t.Fatalf("secret survived: %s", sink.String())
-	}
-	if !strings.Contains(sink.String(), "***") {
-		t.Fatalf("no redaction marker: %s", sink.String())
-	}
-}
-
-// A secret split across two Write calls must still be caught, which is why the
-// writer buffers to line boundaries.
-func TestRedactWriterHandlesSplitWrites(t *testing.T) {
+// filtered too, not just what the entrypoint logs itself. A secret split across
+// two Write calls must still be caught, which is why the writer buffers to line
+// boundaries.
+func TestRedactWriterMasksSplitChildOutput(t *testing.T) {
 	RegisterSecret("split-secret-here")
 	var sink strings.Builder
 	w := &RedactWriter{W: &sink}
@@ -53,6 +39,9 @@ func TestRedactWriterHandlesSplitWrites(t *testing.T) {
 	w.Write([]byte("secret-here suffix\n"))
 	if strings.Contains(sink.String(), "split-secret-here") {
 		t.Fatalf("secret survived a split write: %s", sink.String())
+	}
+	if !strings.Contains(sink.String(), "***") {
+		t.Fatalf("no redaction marker: %s", sink.String())
 	}
 }
 
@@ -102,5 +91,27 @@ func TestRegisterURLSecrets(t *testing.T) {
 		if got := Redact("x " + form + " y"); strings.Contains(got, form) {
 			t.Fatalf("%s not masked: %s", form, got)
 		}
+	}
+}
+
+// A bare userinfo token or a presigned query carries no user:pass pair, yet
+// is the credential; harmless query values stay readable.
+func TestRegisterURLSecretsTokensAndQuery(t *testing.T) {
+	RegisterURLSecrets(&Config{
+		PBFURL:        "https://bucket.example/p.pbf?X-Amz-Credential=AKIDEXAMPLE%2F20260101&X-Amz-Signature=deadbeef1234&format=jsonish",
+		MirrorBaseURL: "https://ghp-token-5678@mirror.example/data",
+	})
+	for _, form := range []string{"AKIDEXAMPLE%2F20260101", "AKIDEXAMPLE/20260101", "deadbeef1234", "ghp-token-5678"} {
+		if got := Redact("x " + form + " y"); strings.Contains(got, form) {
+			t.Errorf("%s not masked: %s", form, got)
+		}
+	}
+	if got := Redact("format=jsonish"); got != "format=jsonish" {
+		t.Errorf("non-credential query value masked: %s", got)
+	}
+	// Neither a non-credential key that contains "sig" nor a short value.
+	RegisterURLSecrets(&Config{PBFURL: "https://b.example/p.pbf?X-Amz-SignedHeaders=host&auth=true"})
+	if got := Redact("lookup host: true"); got != "lookup host: true" {
+		t.Errorf("common words masked: %s", got)
 	}
 }

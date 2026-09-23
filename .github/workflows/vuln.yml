@@ -1,0 +1,22 @@
+name: Vulnerability scan
+
+# Scheduled too: a dependency can become vulnerable without a commit here.
+# Kept out of ci.yml, whose schedule would run the whole matrix and publish.
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: '23 4 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  govulncheck:
+    name: govulncheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The Makefile holds the pinned golang image and govulncheck version.
+      - run: make vuln

@@ -18,13 +18,16 @@ Steps to reproduce the behavior:
 **Expected behavior**
 A clear and concise description of what you expected to happen.
 
-**Screenshots & Logs**
-If applicable, add screenshots & logs to help explain your problem.
+**Setup (please complete the following information):**
+ - Image tag: [e.g. v5.3.2-abc1234, or v5.3.2-abc1234-serve for the serve image]
+ - Compose file: [which contrib/docker-compose*.yml, or your own]
 
-**Desktop / Server (please complete the following information):**
- - OS & Version: [e.g. Debian 10]
- - Docker Version: [e.g. 20.10.5]
- - Nominatim Version: [e.g. 3.7.0]
+**Logs**
+The output of `docker compose logs nominatim-import nominatim`:
+
+```
+paste here
+```
 
 **Additional context**
 Add any other context about the problem here.

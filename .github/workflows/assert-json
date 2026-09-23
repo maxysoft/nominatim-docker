@@ -1,0 +1,81 @@
+#!/usr/bin/env python3
+"""GET a JSON endpoint and assert on the response, retrying while the API may
+still be importing. Standard library only, because the runner's python3 has
+no third-party packages installed.
+
+Usage:
+  assert-json URL                  response is non-empty and not an error
+                                   object ({"error"} or non-zero "status")
+  assert-json URL --empty          response is empty
+  assert-json URL FIELD PATTERN    FIELD (dot path; the first element of an
+                                   array response) matches regex PATTERN
+"""
+
+import http.client
+import json
+import re
+import sys
+import time
+import urllib.error
+import urllib.request
+
+
+def get_json(url, attempts):
+    """GET url and decode JSON, retrying refused connections and 502/503/504
+    with exponential backoff (2 s doubling, capped at 120 s). Exits non-zero
+    on any other failure."""
+    delay = 2
+    for attempt in range(1, attempts + 1):
+        try:
+            with urllib.request.urlopen(url, timeout=60) as resp:
+                return json.load(resp)
+        except urllib.error.HTTPError as e:
+            if e.code not in (502, 503, 504) or attempt == attempts:
+                print(f'Endpoint returned status code {e.code}: {e.read()[:500]!r}')
+                sys.exit(1)
+        except (urllib.error.URLError, http.client.HTTPException, ConnectionError, TimeoutError) as e:
+            if attempt == attempts:
+                print(f'Endpoint unreachable after {attempts} attempts: {e}')
+                sys.exit(1)
+        time.sleep(delay)
+        delay = min(delay * 2, 120)
+
+
+def fail(msg, jsn):
+    print(f'FAIL: {msg}')
+    print(json.dumps(jsn, indent=2))
+    sys.exit(1)
+
+
+if len(sys.argv) not in (2, 3, 4) or (len(sys.argv) == 3 and sys.argv[2] != '--empty'):
+    print(__doc__)
+    sys.exit(2)
+
+url = sys.argv[1]
+
+if len(sys.argv) == 4:
+    field_path, pattern = sys.argv[2], sys.argv[3]
+    jsn = get_json(url, attempts=8)
+    val = jsn[0] if isinstance(jsn, list) and jsn else jsn
+    for k in field_path.split('.'):
+        val = val.get(k) if isinstance(val, dict) else None
+        if val is None:
+            fail(f'field "{field_path}" not found in response', jsn)
+    if not re.search(pattern, str(val)):
+        fail(f'field "{field_path}" = "{val}" does not match pattern "{pattern}"', jsn)
+    print(f'✅ {field_path} = "{val}" matches "{pattern}"')
+    sys.exit(0)
+
+empty = len(sys.argv) == 3
+# The non-empty check is each scenario's first call, so it waits longest:
+# its retries cover the import itself.
+jsn = get_json(url, attempts=8 if empty else 19)
+print(f'JSON response returned by {url}:')
+print(json.dumps(jsn, indent=2))
+if bool(jsn) == empty:
+    fail(f'expected {"an empty" if empty else "a non-empty"} response', jsn)
+# Nominatim reports failures with HTTP 200: reverse answers
+# {"error":"Unable to geocode"}, status.php {"status":700} when the DB is down.
+if not empty and isinstance(jsn, dict) and ('error' in jsn or jsn.get('status', 0) != 0):
+    fail('response reports an error', jsn)
+print(f'✅ JSON was {"empty" if empty else "non-empty"}')

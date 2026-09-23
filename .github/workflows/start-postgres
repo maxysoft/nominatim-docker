@@ -1,25 +1,17 @@
 #!/bin/sh
 # Starts the PostGIS container for a CI scenario and waits until it accepts
-# connections. Replaces 14 identical copies of this bootstrap in ci.yml.
+# connections, on the network run-nominatim joins. No volume: no scenario
+# restarts PostgreSQL, so there is nothing to persist.
 #
-# Usage: start-postgres NETWORK [VOLUME]
+# Usage: start-postgres
 set -eu
 
-net="$1"
-vol="${2:-}"
+docker network create nominatim-net
 
-docker network create "$net"
-
-set --
-if [ -n "$vol" ]; then
-  set -- -v "$vol:/var/lib/postgresql"
-fi
-
-docker run -d --rm --name postgres --network "$net" \
+docker run -d --rm --name postgres --network nominatim-net \
   -e POSTGRES_PASSWORD=very_secure_password \
   -e POSTGRES_USER=postgres \
   -e POSTGRES_DB=nominatim \
-  "$@" \
   postgis/postgis:18-3.6-alpine@sha256:ffcf0c4b904e41b9779f8098007fb5a9484025319c18c70cf8e1bcebb742b9b7
 
 # Matches the docker-compose healthcheck cadence.

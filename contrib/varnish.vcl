@@ -7,7 +7,6 @@ backend default {
     .port = "8080";
     .connect_timeout = 60s;
     .first_byte_timeout = 300s;
-    .between_bytes_timeout = 60s;
 }
 
 # Access control - only allow specific HTTP methods
@@ -23,34 +22,12 @@ sub vcl_recv {
     # Normalize query strings by sorting parameters
     set req.url = std.querysort(req.url);
 
-    # Define caching rules for different endpoints
-    if (req.url ~ "^/search" || req.url ~ "^/search\.php") {
-        # Cache search queries for 1 hour
-        # Search results are relatively stable
+    # Cache the API endpoints (their TTLs are set in vcl_backend_response) and
+    # pass everything else. Each prefix also matches the legacy .php form.
+    if (req.url ~ "^/(search|reverse|lookup|details|status)") {
         return (hash);
     }
-    elsif (req.url ~ "^/reverse" || req.url ~ "^/reverse\.php") {
-        # Cache reverse geocoding for 6 hours
-        # Reverse geocoding results are very stable
-        return (hash);
-    }
-    elsif (req.url ~ "^/lookup" || req.url ~ "^/lookup\.php") {
-        # Cache lookup queries for 24 hours
-        # OSM ID lookups are very stable
-        return (hash);
-    }
-    elsif (req.url ~ "^/details" || req.url ~ "^/details\.php") {
-        # Cache details queries for 12 hours
-        return (hash);
-    }
-    elsif (req.url ~ "^/status" || req.url ~ "^/status\.php") {
-        # Cache status for 1 minute only
-        return (hash);
-    }
-    else {
-        # Don't cache other requests
-        return (pass);
-    }
+    return (pass);
 }
 
 sub vcl_hash {
@@ -77,23 +54,23 @@ sub vcl_backend_response {
     }
 
     # Set cache TTL based on the request URL
-    if (bereq.url ~ "^/search" || bereq.url ~ "^/search\.php") {
+    if (bereq.url ~ "^/search") {
         set beresp.ttl = 1h;
         set beresp.http.Cache-Control = "public, max-age=3600";
     }
-    elsif (bereq.url ~ "^/reverse" || bereq.url ~ "^/reverse\.php") {
+    elsif (bereq.url ~ "^/reverse") {
         set beresp.ttl = 6h;
         set beresp.http.Cache-Control = "public, max-age=21600";
     }
-    elsif (bereq.url ~ "^/lookup" || bereq.url ~ "^/lookup\.php") {
+    elsif (bereq.url ~ "^/lookup") {
         set beresp.ttl = 24h;
         set beresp.http.Cache-Control = "public, max-age=86400";
     }
-    elsif (bereq.url ~ "^/details" || bereq.url ~ "^/details\.php") {
+    elsif (bereq.url ~ "^/details") {
         set beresp.ttl = 12h;
         set beresp.http.Cache-Control = "public, max-age=43200";
     }
-    elsif (bereq.url ~ "^/status" || bereq.url ~ "^/status\.php") {
+    elsif (bereq.url ~ "^/status") {
         set beresp.ttl = 1m;
         set beresp.http.Cache-Control = "public, max-age=60";
     }
@@ -125,16 +102,4 @@ sub vcl_deliver {
     unset resp.http.Server;
     unset resp.http.X-Powered-By;
     unset resp.http.Via;
-
-    return (deliver);
-}
-
-# Handle errors gracefully
-sub vcl_backend_error {
-    # Serve stale content if available
-    if (beresp.ttl + beresp.grace > 0s) {
-        return (deliver);
-    }
-    
-    return (deliver);
 }

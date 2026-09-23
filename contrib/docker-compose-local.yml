@@ -21,6 +21,9 @@ x-logging: &logging
 # /nominatim, /tmp, $HOME (tmpfs) and /dev/shm are written.
 x-nominatim: &nominatim
   init: true
+  # Docker's 10 s default would SIGKILL Gunicorn mid-drain and replication
+  # mid-diff; keep it above GUNICORN_GRACEFUL_TIMEOUT + 5 s.
+  stop_grace_period: 40s
   security_opt:
     - no-new-privileges:true
   read_only: true
@@ -49,12 +52,17 @@ x-database: &database
   # Separate, so the read-only API role cannot log in as the owning role.
   NOMINATIM_WEBUSER_PASSWORD: ${NOMINATIM_WEBUSER_PASSWORD:?set NOMINATIM_WEBUSER_PASSWORD in .env}
 
-# The full image, used by the import and the updater.
+# The full image, as the import and the updater run it. The image healthcheck
+# probes the API, which neither container runs.
 x-full-image: &full-image
   build:
     context: ..
     dockerfile: Dockerfile
   image: nominatim:local
+  healthcheck:
+    disable: true
+  volumes:
+    - nominatim-data:/nominatim
 
 # Shared by import and updater: both regenerate the .env on their common volume
 # from their own environment on every start, so project options from
@@ -63,6 +71,14 @@ x-replication: &replication
   REPLICATION_URL: https://download.geofabrik.de/europe/monaco-updates/
   # Import and updater indexing threads, one database connection each.
   THREADS: 4
+
+# The API and the updater wait for a healthy database and a finished import.
+x-after-import: &after-import
+  nominatim-postgres:
+    condition: service_healthy
+    restart: true
+  nominatim-import:
+    condition: service_completed_successfully
 
 services:
   nominatim-postgres:
@@ -95,13 +111,11 @@ services:
     networks:
       - nominatim-net
 
-  # Runs once. The image healthcheck probes the API, which this container never runs.
+  # Runs once.
   nominatim-import:
     <<: [*nominatim, *full-image]
     command: import
     restart: "no"
-    healthcheck:
-      disable: true
     environment:
       <<: [*database, *replication]
       POSTGRES_ADMIN_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:?set POSTGRES_ADMIN_PASSWORD in .env}
@@ -112,8 +126,6 @@ services:
       # fetched over HTTPS from nominatim.org. Set the IMPORT_* switches to "true"
       # to enable them, or point DATA_MIRROR_URL at your own mirror.
       # DATA_MIRROR_URL: https://nominatim.org/data
-    volumes:
-      - nominatim-data:/nominatim
     depends_on:
       nominatim-postgres:
         condition: service_healthy
@@ -138,12 +150,7 @@ services:
       NOMINATIM_API_POOL_SIZE: 5
     volumes:
       - nominatim-serve-data:/nominatim
-    depends_on:
-      nominatim-postgres:
-        condition: service_healthy
-        restart: true
-      nominatim-import:
-        condition: service_completed_successfully
+    depends_on: *after-import
 
   # Optional (--profile updates). on-failure: once/catch-up exit 0 when done.
   nominatim-updater:
@@ -152,19 +159,10 @@ services:
       - updates
     command: replicate
     restart: on-failure
-    healthcheck:
-      disable: true
     environment:
       <<: [*database, *replication]
       UPDATE_MODE: continuous
-    volumes:
-      - nominatim-data:/nominatim
-    depends_on:
-      nominatim-postgres:
-        condition: service_healthy
-        restart: true
-      nominatim-import:
-        condition: service_completed_successfully
+    depends_on: *after-import
 
 volumes:
   postgres-data:

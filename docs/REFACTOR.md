@@ -305,11 +305,11 @@ make integration  # full local stack: import Monaco, assert behaviour
 
 `test/integration.sh` runs against a real PostGIS container. It covers the API
 surface and the regressions this refactor targets, but **not** the whole CI matrix.
-Not covered locally, and still only exercised in CI: `UPDATE_MODE=once`/
-`continuous`, `FREEZE`, `PBF_PATH`, the GB postcode import, `WARMUP_ON_STARTUP`,
-the dataset download path, the flatnode directory, `*_SHA256` verification, the
-role-adoption refusal, and the `ALLOW_DROP_EXISTING_DB` guard. The scenarios it
-does run:
+Not covered locally, and only exercised in CI: `UPDATE_MODE=once`/`continuous` on
+the single-container image, `FREEZE`, `PBF_PATH`, the GB postcode import and its
+dataset download, `WARMUP_ON_STARTUP` and `REVERSE_ONLY`. **Not tested anywhere:**
+the flatnode directory, `*_SHA256` verification and the role-adoption refusal.
+The scenarios it does run (CI runs `serve_image`, `split` and `drop_guard`):
 
 - `full`: import, then the search/reverse/lookup/details/status surface and
   `nominatim admin --check-database`
@@ -318,9 +318,17 @@ does run:
   `0600` and placeholder-free, Gunicorn runs unprivileged
 - `restart`: `placex` row count is unchanged across a restart
 - `volume_loss`: **removing the project volume does not drop the database**
+- `serve_image`: the serve target lacks osm2pgsql and psql, refuses a database
+  with no import, and serves an imported one
 - `shutdown`: clean stop exits 0, promptly
 - `failfast`: misconfiguration exits non-zero with a diagnostic instead of
   hanging
+- `unicode_password`: a non-ASCII password (SASLprep) authenticates, and the
+  cleartext never reaches the logs
+- `split`: `contrib/docker-compose-local.yml` runs the one-shot import, an API
+  without admin credentials, a skipping second import and the updater
+- `drop_guard`: a database holding tables is not dropped unless
+  `ALLOW_DROP_EXISTING_DB=true`
 
 Unit tests cover the pure logic where the shell bugs lived: SQL quoting against
 the injection strings, `.env` rendering idempotence and the interval-splicing
@@ -339,13 +347,12 @@ Deliberately not addressed, listed so they are not mistaken for oversights:
   far as it can be: nothing is touched when the extensions are already present,
   the step is skipped entirely for a superuser role, and it is logged when it
   does act. On a shared cluster, set it to `false`.
-- **The `publish` job rebuilds rather than promoting the tested image.** The test
-  matrix builds `linux/amd64` only while publish builds `amd64,arm64`, so the
-  bytes that ship are not the bytes that passed. Provenance and SBOM attestation
-  are emitted; closing the gap needs a digest-based promotion step.
-- **No image vulnerability scanning in CI.** No Trivy or Grype gate, and no
-  scheduled rebuild, so a CVE in a floating apt package surfaces only on the next
-  push.
+- **Only amd64 is tested.** Publish reuses the build job's layer cache, so on a
+  cache hit the amd64 image pushed is the tested one; arm64 is built at publish
+  time and never tested. Closing the gap needs an arm64 test run.
+- **No image vulnerability scanning in CI.** `govulncheck` runs weekly for the Go
+  dependencies, but no Trivy or Grype gate covers the apt and Python layers, so a
+  CVE in a floating apt package surfaces only on the next push.
 - **APT packages float.** The base image is digest-pinned and Python is
   hash-pinned, but apt is not, so two builds of the same commit can differ.
   Pinning every apt version would freeze the image on known-vulnerable packages
@@ -355,9 +362,11 @@ Deliberately not addressed, listed so they are not mistaken for oversights:
 
 - Nominatim itself, its version (5.3.2), and its Python stack.
 - The HTTP API surface, port, and response formats.
-- `contrib/postgres/*.conf` tuning profiles.
-- The Varnish setup, beyond two pre-existing bugs fixed in
-  `contrib/docker-compose-varnish.yml`: a missing top-level `networks:` block that
-  made it fail `docker compose config` on master, and `POSTGRES_HOST: postgres`,
-  which named a service that does not exist in that file (it is
-  `nominatim-postgres`), so the stack could parse and still never start.
+
+The `contrib/postgres/*.conf` profiles and the Varnish example did change; see the
+CHANGELOG. `postgresql.conf` and `16g-postgresql.conf` raise `max_wal_size` to 8GB
+with a 30 minute `checkpoint_timeout`. Varnish moves from 8.0 to the `9.0.4` image
+(check custom VCL against it), no longer caches 5xx responses and keys on
+`Accept-Language`. `contrib/docker-compose-varnish.yml` also gained its missing
+top-level `networks:` block and a `POSTGRES_HOST` naming the real
+`nominatim-postgres` service; on master it failed `docker compose config`.

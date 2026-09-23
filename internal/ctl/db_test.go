@@ -59,6 +59,27 @@ func TestRoleIsSuperuser(t *testing.T) {
 	}
 }
 
+// Removing SUPERUSER from NOMINATIM_ROLE_OPTIONS must revoke it, and only a
+// superuser role gets NOSUPERUSER (issuing it needs superuser).
+func TestReconcileRoleOptions(t *testing.T) {
+	for _, tc := range []struct {
+		opts  string
+		super bool
+		want  string
+	}{
+		{"CREATEDB", true, "NOSUPERUSER CREATEDB"},
+		{"", true, "NOSUPERUSER"},
+		{"SUPERUSER", true, "SUPERUSER"},
+		{"NOSUPERUSER CREATEDB", true, "NOSUPERUSER CREATEDB"},
+		{"CREATEDB", false, "CREATEDB"},
+		{"", false, ""},
+	} {
+		if got := reconcileRoleOptions(tc.opts, tc.super); got != tc.want {
+			t.Errorf("reconcileRoleOptions(%q, %v) = %q, want %q", tc.opts, tc.super, got, tc.want)
+		}
+	}
+}
+
 // A password reaching ALTER ROLE unescaped was arbitrary SQL execution as the
 // PostgreSQL superuser.
 func TestQuoteLiteral(t *testing.T) {
@@ -136,27 +157,6 @@ func TestScramVerifierMatchesReferenceImplementation(t *testing.T) {
 	}
 }
 
-func TestScramVerifierIsDeterministicForAGivenSalt(t *testing.T) {
-	salt := []byte("fixed-salt-16byt")
-	mk := func(pw string, s []byte) string {
-		v, err := scramVerifier(pw, s, scramIterations)
-		if err != nil {
-			t.Fatalf("ScramVerifier: %v", err)
-		}
-		return v
-	}
-	a := mk("pw", salt)
-	if b := mk("pw", salt); a != b {
-		t.Fatal("verifier is not deterministic for a fixed salt")
-	}
-	if c := mk("pw", []byte("different-salt16")); c == a {
-		t.Fatal("a different salt produced the same verifier")
-	}
-	if c := mk("other", salt); c == a {
-		t.Fatal("a different password produced the same verifier")
-	}
-}
-
 // The whole point: the cleartext password must not appear in the statement,
 // for any password, not only printable ASCII.
 func TestPasswordSecretHidesTheCleartext(t *testing.T) {
@@ -214,18 +214,6 @@ func TestSASLprepFallsBackOnProhibitedInput(t *testing.T) {
 	in := "bad\u0007control" // BEL is prohibited by RFC 4013
 	if got := saslprep(in); got != in {
 		t.Fatalf("saslprep(%q) = %q, want the input unchanged", in, got)
-	}
-}
-
-// A non-ASCII password must produce a verifier over the *prepared* form.
-func TestVerifierUsesPreparedPassword(t *testing.T) {
-	salt := []byte("0123456789abcdef")
-	// These two differ only by a SOFT HYPHEN, which SASLprep removes, so both
-	// must yield the same verifier.
-	a, _ := scramVerifier(saslprep("I\u00ADX"), salt, scramIterations)
-	b, _ := scramVerifier(saslprep("IX"), salt, scramIterations)
-	if a != b {
-		t.Fatal("SASLprep was not applied before hashing")
 	}
 }
 

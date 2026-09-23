@@ -1,11 +1,11 @@
 package ctl
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -77,7 +77,7 @@ func TestFetchRetriesTransientFailure(t *testing.T) {
 			w.WriteHeader(http.StatusBadGateway)
 			return
 		}
-		http.ServeContent(w, r, "f", time.Time{}, newSeeker(body))
+		http.ServeContent(w, r, "f", time.Time{}, bytes.NewReader(body))
 	}))
 	defer srv.Close()
 
@@ -112,7 +112,7 @@ func TestFetchResumesFromPartialFile(t *testing.T) {
 	body := []byte("0123456789abcdefghij")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("ETag", `"v1"`)
-		http.ServeContent(w, r, "f", time.Time{}, newSeeker(body))
+		http.ServeContent(w, r, "f", time.Time{}, bytes.NewReader(body))
 	}))
 	defer srv.Close()
 
@@ -203,7 +203,7 @@ func TestFetchDoesNotResumeForeignPartial(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("ETag", `"v1"`)
-				http.ServeContent(w, r, "f", time.Time{}, newSeeker(body))
+				http.ServeContent(w, r, "f", time.Time{}, bytes.NewReader(body))
 			}))
 			defer srv.Close()
 
@@ -293,7 +293,7 @@ func TestFetchAbandonsStalledBody(t *testing.T) {
 			return
 		}
 		w.Header().Set("ETag", `"v1"`)
-		http.ServeContent(w, r, "f", time.Time{}, newSeeker(body))
+		http.ServeContent(w, r, "f", time.Time{}, bytes.NewReader(body))
 	}))
 	defer srv.Close()
 
@@ -318,7 +318,7 @@ func TestFetchAcceptsFullLengthPartial(t *testing.T) {
 			atomic.AddInt32(&full, 1)
 		}
 		w.Header().Set("ETag", `"v1"`)
-		http.ServeContent(w, r, "f", time.Time{}, newSeeker(body))
+		http.ServeContent(w, r, "f", time.Time{}, bytes.NewReader(body))
 	}))
 	defer srv.Close()
 
@@ -399,34 +399,4 @@ func TestReachable(t *testing.T) {
 	if d.Reachable(context.Background(), down.URL, 2, time.Millisecond) {
 		t.Error("404 server reported reachable")
 	}
-}
-
-// newSeeker adapts a byte slice for http.ServeContent, which needs a ReadSeeker
-// to implement range requests.
-func newSeeker(b []byte) *byteSeeker { return &byteSeeker{b: b} }
-
-type byteSeeker struct {
-	b   []byte
-	pos int64
-}
-
-func (s *byteSeeker) Read(p []byte) (int, error) {
-	if s.pos >= int64(len(s.b)) {
-		return 0, io.EOF
-	}
-	n := copy(p, s.b[s.pos:])
-	s.pos += int64(n)
-	return n, nil
-}
-
-func (s *byteSeeker) Seek(off int64, whence int) (int64, error) {
-	switch whence {
-	case 0:
-		s.pos = off
-	case 1:
-		s.pos += off
-	case 2:
-		s.pos = int64(len(s.b)) + off
-	}
-	return s.pos, nil
 }

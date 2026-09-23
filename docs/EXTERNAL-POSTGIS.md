@@ -23,18 +23,9 @@ Key settings to consider:
 
 ## Environment Variables
 
-The following environment variables are used to configure the external database connection:
-
-### Required Variables
-- `POSTGRES_HOST`: Hostname or IP address of the PostgreSQL server (default: `postgres`)
-- `POSTGRES_PORT`: Port number of the PostgreSQL server (default: `5432`)
-- `POSTGRES_DB`: Name of the database to use (default: `nominatim`)
-- `NOMINATIM_PASSWORD`: Password for the Nominatim database users
-- `POSTGRES_ADMIN_PASSWORD`: Password for the PostgreSQL superuser. Required for the initial import, never derived from `NOMINATIM_PASSWORD`
-
-### Optional Variables
-All other Nominatim configuration variables remain the same as in the original documentation.
-
+The connection is configured with `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_DB`, `POSTGRES_SSLMODE`,
+`NOMINATIM_PASSWORD` and `POSTGRES_ADMIN_PASSWORD`. Defaults and every other variable are listed in
+[howto.md](../howto.md#general-parameters).
 
 ## Database Setup
 

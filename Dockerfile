@@ -1,12 +1,13 @@
-# syntax=docker/dockerfile:1.7
+# syntax=docker/dockerfile:1.27.0@sha256:bde3983e9c939224420ddaf6b784cc30e09b035a4dea01f581230c50809f372e
 ARG NOMINATIM_VERSION=5.3.2
 ARG USER_AGENT=maxysoft/nominatim-docker:${NOMINATIM_VERSION}
 
 # Pinned by digest so a mutated tag can never change the base image. Upgrade:
-# docker buildx imagetools inspect debian:<v>-slim; update here and the Makefile.
-ARG BASE_IMAGE=debian:13.6-slim@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b6259bc132
-# Pinned by digest like the base image; the Makefile uses the same reference.
-ARG GO_IMAGE=golang:1.27.1-bookworm@sha256:648f440f42a0958804efb24df176f806f9d353b41f1c0627f666428e40310f6b
+# docker buildx imagetools inspect debian:<v>-slim. The Makefile reads both pins
+# from here.
+ARG BASE_IMAGE=debian:13.7-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a
+# Pinned by digest like the base image.
+ARG GO_IMAGE=golang:1.27.1-bookworm@sha256:69a7b9788769bec032d238959b61854e9ae87f57be9029ec04e9885fabf99195
 
 # Fixed IDs so a rebuilt image keeps working with existing data volumes.
 ARG NOMINATIM_UID=1000
@@ -55,9 +56,8 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 COPY requirements.txt /tmp/requirements.txt
 RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
     python3 -m venv --system-site-packages /opt/nominatim \
-    && /opt/nominatim/bin/pip install --disable-pip-version-check --require-hashes -r /tmp/requirements.txt \
-    && /opt/nominatim/bin/pip uninstall -y --disable-pip-version-check pip \
-    && find /opt/nominatim -name '__pycache__' -type d -prune -exec rm -rf {} +
+    && /opt/nominatim/bin/pip install --disable-pip-version-check --no-compile --require-hashes -r /tmp/requirements.txt \
+    && /opt/nominatim/bin/pip uninstall -y --disable-pip-version-check pip
 
 
 # ---------------------------------------------------------------------------
@@ -79,7 +79,6 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PATH=/opt/nominatim/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
     PROJECT_DIR=/nominatim \
     NOMINATIM_HOME=/var/lib/nominatim \
-    WARMUP_ON_STARTUP=false \
     USER_AGENT=${USER_AGENT}
 
 # hadolint ignore=DL3008  # see docs/REFACTOR.md: base image is digest-pinned; apt floats deliberately
@@ -91,8 +90,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     && apt-get -y install -o APT::Install-Recommends=false -o APT::Install-Suggests=false \
         ca-certificates \
         python3 \
-        python3-icu \
-    && rm -rf /var/lib/apt/lists/*
+        python3-icu
 
 # Written directly instead of via useradd, whose package ships five
 # setuid-root binaries. Fixed IDs keep data volumes working across rebuilds.
@@ -111,7 +109,6 @@ RUN find / -xdev -type f -perm /6000 -exec chmod ug-s {} + \
 
 WORKDIR ${PROJECT_DIR}
 EXPOSE 8080
-STOPSIGNAL SIGTERM
 
 # Long start period: a planet import legitimately runs for days before the API
 # answers, and must not be reported unhealthy meanwhile.
@@ -148,9 +145,7 @@ FROM serve-base AS full
 # hadolint ignore=DL3008  # see docs/REFACTOR.md: base image is digest-pinned; apt floats deliberately
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
-    printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d \
-    && chmod +x /usr/sbin/policy-rc.d \
-    && apt-get -y update -qq \
+    apt-get -y update -qq \
     && apt-get -y install -o APT::Install-Recommends=false -o APT::Install-Suggests=false \
         osm2pgsql \
     # psql looks unused (this repo talks to PostgreSQL via pgx), but
@@ -171,8 +166,6 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     # Fail the build, not production, if a future package change makes
     # osm2pgsql actually need any of the above.
     && osm2pgsql --version \
-    && rm -f /usr/sbin/policy-rc.d \
-    && rm -rf /var/lib/apt/lists/* \
     # The serve stage already stripped and asserted; re-strip and re-assert in
     # case a package installed here ships a setuid/setgid binary.
     && find / -xdev -type f -perm /6000 -exec chmod ug-s {} + \

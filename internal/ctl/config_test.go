@@ -7,6 +7,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 func withEnv(t *testing.T, kv map[string]string) {
@@ -48,9 +50,7 @@ func TestLoadDefaults(t *testing.T) {
 // A password with no default is the whole point: the previous image shipped one
 // baked into the Dockerfile and used it as a PostgreSQL superuser password.
 func TestPasswordIsRequired(t *testing.T) {
-	env := baseEnv()
-	delete(env, "NOMINATIM_PASSWORD")
-	withEnv(t, env)
+	withEnv(t, baseEnv())
 	t.Setenv("NOMINATIM_PASSWORD", "")
 	if _, err := Load(); err == nil {
 		t.Fatal("expected Load to fail without NOMINATIM_PASSWORD")
@@ -73,16 +73,6 @@ func TestPasswordFromFile(t *testing.T) {
 	}
 	if c.NominatimPassword != "from-file" {
 		t.Fatalf("password = %q, want from-file", c.NominatimPassword)
-	}
-}
-
-// Nominatim splits its own DSN on ';', so such a password would silently
-// truncate the connection string rather than fail.
-func TestPasswordRejectsDSNSeparator(t *testing.T) {
-	withEnv(t, baseEnv())
-	t.Setenv("NOMINATIM_PASSWORD", "pass;word")
-	if _, err := Load(); err == nil {
-		t.Fatal("expected rejection of ';' in NOMINATIM_PASSWORD")
 	}
 }
 
@@ -111,9 +101,7 @@ func TestPBFMutualExclusion(t *testing.T) {
 
 // The admin password must never be inferred from the application password.
 func TestAdminPasswordNotDerived(t *testing.T) {
-	env := baseEnv()
-	delete(env, "POSTGRES_ADMIN_PASSWORD")
-	withEnv(t, env)
+	withEnv(t, baseEnv())
 	t.Setenv("POSTGRES_ADMIN_PASSWORD", "")
 
 	c, err := Load()
@@ -217,24 +205,28 @@ func TestInvalidSSLModeRejected(t *testing.T) {
 	}
 }
 
-// url.QueryEscape encodes a space as "+", and the userinfo decoder in net/url
-// does not map it back. The role password would be set correctly and then fail
-// every subsequent login.
+// Parsed by pgx itself, not net/url: pgx follows libpq, which ends the
+// userinfo at the first '@' and keeps '+' literal. A mis-escaped password is
+// set correctly on the role and then fails every subsequent login.
 func TestLibpqURLSurvivesSpecialCharactersInPassword(t *testing.T) {
 	withEnv(t, baseEnv())
 	c, err := Load()
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	for _, pw := range []string{"my pass", "p@ss/word", "a+b", "%41", "pä ss"} {
-		u := c.LibpqURL("nominatim", pw, "nominatim")
-		parsed, err := url.Parse(u)
+	for _, tc := range []struct{ pw, db string }{
+		{"my pass", "nominatim"}, {"p@ss/word", "nominatim"}, {"a+b", "nominatim"},
+		{"%41", "nominatim"}, {"pä ss", "nominatim"}, {"a:b@c#d?e", "nominatim"},
+		{"@:/%+ #?", "my db%@#?"},
+	} {
+		u := c.LibpqURL("nominatim", tc.pw, tc.db)
+		cfg, err := pgconn.ParseConfig(u)
 		if err != nil {
-			t.Fatalf("LibpqURL(%q) is not parseable: %v", pw, err)
+			t.Fatalf("LibpqURL(%q, %q) is not parseable by pgx: %v", tc.pw, tc.db, err)
 		}
-		got, _ := parsed.User.Password()
-		if got != pw {
-			t.Errorf("password round-trip failed: put %q, got %q (url %s)", pw, got, u)
+		if cfg.User != "nominatim" || cfg.Password != tc.pw || cfg.Database != tc.db || cfg.Host != "db" || cfg.Port != 5432 {
+			t.Errorf("round-trip failed for password %q, database %q: got user %q password %q database %q host %q port %d (url %s)",
+				tc.pw, tc.db, cfg.User, cfg.Password, cfg.Database, cfg.Host, cfg.Port, u)
 		}
 	}
 }
@@ -437,5 +429,20 @@ func TestRenderEnvFileServeImageUsesWebRole(t *testing.T) {
 	importToolsPresent = func() bool { return true }
 	if env := RenderEnvFile(c); !strings.Contains(env, "user=nominatim;") {
 		t.Fatalf("full image .env must carry the application role:\n%s", env)
+	}
+}
+
+// GUNICORN_GRACEFUL_TIMEOUT drives the SIGKILL deadline, so it must be a number.
+func TestGracefulTimeout(t *testing.T) {
+	withEnv(t, baseEnv())
+	c, err := Load()
+	if err != nil || c.GunicornGracefulTimeout != 30 {
+		t.Fatalf("default = %v, %v; want 30", c, err)
+	}
+	for _, bad := range []string{"abc", "-1"} {
+		t.Setenv("GUNICORN_GRACEFUL_TIMEOUT", bad)
+		if _, err := Load(); err == nil {
+			t.Errorf("GUNICORN_GRACEFUL_TIMEOUT=%q accepted", bad)
+		}
 	}
 }

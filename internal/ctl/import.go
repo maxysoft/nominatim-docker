@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -151,7 +152,7 @@ func provisionDatabase(ctx context.Context, c *Config) error {
 		}
 		// The drop is allowed either way, and this is the only way out for a
 		// database left invalid by an interrupted DROP (PostgreSQL 16+).
-		Logf("cannot inspect database %q (%s); treating it as populated", c.PostgresDB, Redact(err.Error()))
+		Logf("cannot inspect database %q (%v); treating it as populated", c.PostgresDB, err)
 		hasData = true
 	}
 
@@ -190,12 +191,7 @@ func provisionDatabase(ctx context.Context, c *Config) error {
 // roleIsSuperuser reports whether NOMINATIM_ROLE_OPTIONS grants SUPERUSER. A
 // substring test would also match NOSUPERUSER.
 func roleIsSuperuser(options string) bool {
-	for _, opt := range strings.Fields(options) {
-		if strings.EqualFold(opt, "SUPERUSER") {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(strings.Fields(options), func(o string) bool { return strings.EqualFold(o, "SUPERUSER") })
 }
 
 // configureReplicationOrFreeze runs the post-import replication/freeze branch.

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 #
 # Local integration test: builds the image, imports Monaco into a throwaway
-# PostGIS container, and asserts the same behaviour the CI matrix checks.
+# PostGIS, and asserts the API, privilege, restart, shutdown and split-stack
+# behaviour.
 #
 # Usage: test/integration.sh [scenario ...]
 # Scenarios: full security restart volume_loss serve_image shutdown failfast
@@ -46,13 +47,29 @@ wait_for_api() {
       $COMPOSE logs --tail 60 nominatim
       return 1
     fi
-    if curl -fsS --max-time 5 "$BASE_URL/status.php?format=json" >/dev/null 2>&1; then
+    if status_ok "$BASE_URL/status.php?format=json"; then
       return 0
     fi
     sleep 5
   done
   log "timed out waiting for the API"
   $COMPOSE logs --tail 60 nominatim
+  return 1
+}
+
+# status_ok URL: a status.php URL reports status 0. The HTTP code alone proves
+# nothing: Nominatim answers 200 {"status":700} when it cannot reach the DB.
+status_ok() {
+  local body
+  body=$(curl -fsS --max-time 5 "$1" 2>/dev/null) && [[ $body == *'"status":0'* ]]
+}
+
+# wait_url URL [TRIES] polls a status.php URL every 2 s until it reports status 0.
+wait_url() {
+  for _ in $(seq 1 "${2:-60}"); do
+    status_ok "$1" && return 0
+    sleep 2
+  done
   return 1
 }
 
@@ -128,10 +145,13 @@ scenario_full() {
   assert_json_nonempty "/lookup.php?osm_ids=R1124039&format=json"             "lookup answers"
   assert_contains      "/details.php?osmtype=R&osmid=1124039&format=json" '"category":"boundary"' "details answers"
 
-  if curl -sI --max-time 15 "$BASE_URL/status.php?format=json" | grep -qi 'application/json'; then
+  # GET, not HEAD: Nominatim answers HEAD with a 405 whose error body is JSON too.
+  local ct
+  ct=$(curl -s -o /dev/null -w '%{content_type}' --max-time 15 "$BASE_URL/status.php?format=json" || true)
+  if [[ $ct == application/json* ]]; then
     ok "Content-Type is application/json"
   else
-    bad "Content-Type is not application/json"
+    bad "Content-Type is not application/json (got: $ct)"
   fi
 
   if $COMPOSE exec -T -u nominatim nominatim nominatim admin --check-database --project-dir /nominatim >/dev/null 2>&1; then
@@ -341,15 +361,7 @@ scenario_serve_image() {
     -p "127.0.0.1:$((ITEST_PORT + 1)):8080" \
     "$IMAGE-serve" >/dev/null
 
-  local ready=0
-  for _ in $(seq 1 60); do
-    if curl -fsS --max-time 5 "http://127.0.0.1:$((ITEST_PORT + 1))/status.php?format=json" >/dev/null 2>&1; then
-      ready=1
-      break
-    fi
-    sleep 2
-  done
-  if [[ $ready -eq 1 ]]; then
+  if wait_url "http://127.0.0.1:$((ITEST_PORT + 1))/status.php?format=json"; then
     ok "serve image serves the existing import on a read-only root filesystem"
   else
     bad "serve image never became ready"
@@ -506,12 +518,7 @@ scenario_split() {
   # The API depends on service_completed_successfully, now satisfied.
   $SPLIT up -d nominatim >/dev/null 2>&1 || true
 
-  local ready=0
-  for _ in $(seq 1 60); do
-    if curl -fsS --max-time 5 "$url/status.php?format=json" >/dev/null 2>&1; then ready=1; break; fi
-    sleep 2
-  done
-  if [[ $ready -eq 1 ]]; then
+  if wait_url "$url/status.php?format=json"; then
     ok "serve-only API answers"
   else
     bad "serve-only API never became ready"

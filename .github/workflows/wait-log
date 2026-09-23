@@ -1,0 +1,19 @@
+#!/bin/sh
+# Waits until the nominatim container's log contains PATTERN (a fixed
+# string), polling every 5 s. Polled rather than `docker logs -f | grep -m1`:
+# that pipeline reports the timeout's exit status even when it matches.
+#
+# Usage: wait-log PATTERN [TRIES]
+set -eu
+
+for _ in $(seq 1 "${2:-60}"); do
+  if docker logs nominatim 2>&1 | grep -qF -- "$1"; then
+    echo "log contains: $1"
+    exit 0
+  fi
+  sleep 5
+done
+
+echo "log never contained: $1"
+docker logs --tail 50 nominatim
+exit 1

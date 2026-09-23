@@ -49,21 +49,6 @@ func BaseEnv(c *Config) []string {
 	return append(env, "NOMINATIM_DATABASE_DSN="+c.DSN("nominatim", c.NominatimPassword))
 }
 
-// PrepareProjectDir creates the project directory, renders the configuration
-// into it, and takes ownership of NOMINATIM_HOME. Under a read-only root
-// filesystem, $HOME is a tmpfs mounted fresh and root-owned on every boot.
-func PrepareProjectDir(c *Config, uid, gid int) error {
-	if err := os.MkdirAll(c.ProjectDir, 0o755); err != nil {
-		return err
-	}
-	if os.Geteuid() == 0 {
-		if err := os.Chown(nominatimHome, uid, gid); err != nil {
-			return fmt.Errorf("chown %s: %w", nominatimHome, err)
-		}
-	}
-	return WriteEnvFile(c, uid, gid)
-}
-
 // NewRunner resolves the unprivileged account, prepares the project directory
 // and returns the Runner every subcommand launches Nominatim through.
 func NewRunner(c *Config) (*Runner, error) {
@@ -71,10 +56,20 @@ func NewRunner(c *Config) (*Runner, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := PrepareProjectDir(c, uid, gid); err != nil {
+	if err := os.MkdirAll(c.ProjectDir, 0o755); err != nil {
 		return nil, err
 	}
-	return &Runner{UID: uid, GID: gid, Dir: c.ProjectDir, Env: BaseEnv(c)}, nil
+	// Under a read-only root filesystem, $HOME is a tmpfs mounted fresh and
+	// root-owned on every boot.
+	if os.Geteuid() == 0 {
+		if err := os.Chown(nominatimHome, uid, gid); err != nil {
+			return nil, fmt.Errorf("chown %s: %w", nominatimHome, err)
+		}
+	}
+	if err := WriteEnvFile(c, uid, gid); err != nil {
+		return nil, err
+	}
+	return &Runner{UID: uid, GID: gid, Dir: c.ProjectDir, Env: BaseEnv(c), Grace: c.ShutdownGrace()}, nil
 }
 
 // Serve runs the full container lifecycle: configure, import if needed, then
@@ -102,22 +97,28 @@ func Serve(ctx context.Context, c *Config) error {
 	if err := waitForDatabase(ctx, appURL, 150, 2*time.Second); err != nil {
 		return err
 	}
-
-	if err := r.Run(ctx, "nominatim", "refresh", "--functions", "--project-dir", c.ProjectDir); err != nil {
+	frozen, owned, err := databaseState(ctx, appURL, c.PostgresDB)
+	if err != nil {
 		return err
 	}
 
-	replication, replicationDone, err := startReplication(ctx, c, r)
+	// An adopted database owned by another role cannot have its functions
+	// replaced; they exist in a validated database, so there it is a warning.
+	// On a database this image owns, a failure is real and stops the start.
+	if err := r.Run(ctx, "nominatim", "refresh", "--functions", "--project-dir", c.ProjectDir); err != nil {
+		if owned || ctx.Err() != nil {
+			return err
+		}
+		Logf("WARNING: SQL functions not refreshed: %v (the database is not owned by the nominatim role)", err)
+	}
+
+	replication, replicationDone, err := startReplication(ctx, c, r, frozen)
 	if err != nil {
 		return err
 	}
 
 	if c.WarmupOnStartup {
-		if c.ReverseOnly {
-			Logf("warming database caches for reverse queries")
-		} else {
-			Logf("warming database caches for search and reverse queries")
-		}
+		Logf("warming database caches")
 		if err := warmCaches(ctx, c, r); err != nil {
 			return err
 		}
@@ -153,7 +154,7 @@ func EnsureImported(ctx context.Context, c *Config, r *Runner) error {
 	settled := func() error {
 		if haveAdmin {
 			if err := reconcileRoles(ctx, c, probeURL); err != nil {
-				Logf("WARNING: role passwords not reconciled: %v", Redact(err.Error()))
+				Logf("WARNING: role passwords not reconciled: %v", err)
 			}
 		}
 		return chownProjectFiles(c, r.UID, r.GID)
@@ -183,7 +184,14 @@ func EnsureImported(ctx context.Context, c *Config, r *Runner) error {
 	// proven missing or empty may reach it; any other error stops here.
 	hasData, err := databaseHasTables(ictx, targetURL)
 	if err != nil {
-		return fmt.Errorf("cannot inspect database %q, refusing to import over it: %w", c.PostgresDB, err)
+		if !c.AllowDropExistingDB {
+			return fmt.Errorf("cannot inspect database %q, refusing to import over it: %w\n"+
+				"Set ALLOW_DROP_EXISTING_DB=true (or run `nominatim-ctl reimport`) to discard it and import again", c.PostgresDB, err)
+		}
+		// The drop is allowed either way; the import below is the way out
+		// for a database left invalid by an interrupted DROP.
+		Logf("cannot inspect database %q (%v); ALLOW_DROP_EXISTING_DB=true, importing over it", c.PostgresDB, err)
+		hasData = true
 	}
 
 	if hasData && !c.AllowDropExistingDB {
@@ -200,12 +208,12 @@ func EnsureImported(ctx context.Context, c *Config, r *Runner) error {
 		// database was not created here, so these may lack ownership; the
 		// import is valid either way, so a failure is a warning, not an outage.
 		if err := configureReplicationOrFreeze(ctx, c, r, NewDownloader(c.UserAgent)); err != nil {
-			Logf("WARNING: adopted import: %v (the nominatim role may not own its tables)", Redact(err.Error()))
+			Logf("WARNING: adopted import: %v (the nominatim role may not own its tables)", err)
 		}
 		if err := finishImport(ctx, c, targetURL); err != nil {
 			Logf("WARNING: adopted import not stamped: %v. It is served and validated again on the next start; "+
 				"to stamp it, run as its owner: COMMENT ON DATABASE %s IS %s",
-				Redact(err.Error()), QuoteIdentifier(c.PostgresDB), QuoteLiteral(importMarker))
+				err, QuoteIdentifier(c.PostgresDB), QuoteLiteral(importMarker))
 		}
 		return settled()
 	}
@@ -218,10 +226,17 @@ func EnsureImported(ctx context.Context, c *Config, r *Runner) error {
 const replicationRetry = time.Minute
 
 // startReplication launches the background diff process, if configured. The
-// channel receives its exit status; stop terminates it.
-func startReplication(ctx context.Context, c *Config, r *Runner) (stop func(), done <-chan error, err error) {
-	if c.ReplicationURL == "" || c.Freeze {
+// channel receives its exit status; stop terminates it. REPLICATION_URL wins
+// over FREEZE, as in the import, which then never froze the database.
+func startReplication(ctx context.Context, c *Config, r *Runner, frozen bool) (stop func(), done <-chan error, err error) {
+	if c.ReplicationURL == "" {
 		Logf("skipping replication")
+		return nil, nil, nil
+	}
+	// The state decides, not FREEZE: a frozen database has no update tables,
+	// and replicating into it would fail on every diff.
+	if frozen {
+		Logf("WARNING: %q is frozen (imported with FREEZE=true) and cannot take updates; serving without replication. Re-import without FREEZE to enable them", c.PostgresDB)
 		return nil, nil, nil
 	}
 	// nominatim replication shells out to osm2pgsql for every diff, which the
@@ -308,13 +323,12 @@ func replicationArgs(c *Config) []string {
 
 // Replicate runs replication in the foreground: the updater container of a
 // split deployment. `once` and `catch-up` exit when done; the restart policy
-// governs `continuous`.
+// governs `continuous`. FREEZE is ignored: with REPLICATION_URL set, the
+// import never froze the database.
 func Replicate(ctx context.Context, c *Config) error {
 	switch {
 	case c.ReplicationURL == "":
 		return errors.New("REPLICATION_URL must be set to replicate")
-	case c.Freeze:
-		return errors.New("FREEZE=true: a frozen database cannot take updates")
 	case !HaveImportTools():
 		return errors.New("this is the serve-only image: osm2pgsql is not installed, so it cannot apply updates; run replicate from the full image")
 	}
@@ -327,19 +341,27 @@ func Replicate(ctx context.Context, c *Config) error {
 		return err
 	}
 
-	// Via the maintenance database: a missing target must say "import first",
-	// not wait five minutes.
-	probeURL := c.LibpqURL("nominatim", c.NominatimPassword, "postgres")
+	// POSTGRES_DB itself, as serve does: the role may be kept out of the
+	// maintenance database. A missing one ends the wait at once.
+	probeURL := c.LibpqURL("nominatim", c.NominatimPassword, c.PostgresDB)
 	Logf("waiting for PostgreSQL at %s:%d", c.PostgresHost, c.PostgresPort)
 	if err := waitForDatabase(ctx, probeURL, 150, 2*time.Second); err != nil {
+		if isMissingDatabase(err) {
+			return fmt.Errorf("no completed Nominatim import in %q (the database does not exist); run `nominatim-ctl import` first", c.PostgresDB)
+		}
 		return err
 	}
 	complete, err := readImportMarker(ctx, probeURL, c.PostgresDB)
 	if err != nil {
-		return err
+		return fmt.Errorf("cannot read the import marker of %q: %w", c.PostgresDB, err)
 	}
 	if !complete {
 		return fmt.Errorf("no completed Nominatim import in %q; run `nominatim-ctl import` first", c.PostgresDB)
+	}
+	if frozen, _, err := databaseState(ctx, probeURL, c.PostgresDB); err != nil {
+		return err
+	} else if frozen {
+		return fmt.Errorf("%q is frozen (imported with FREEZE=true) and cannot take updates; re-import without FREEZE", c.PostgresDB)
 	}
 
 	// Unlike serve, unreachable is an error: exit non-zero, let the restart policy retry.
@@ -367,7 +389,7 @@ func runGunicorn(ctx context.Context, c *Config, r *Runner, stopReplication func
 		// Bounded request handling: a slow or oversized client must not hold a
 		// worker forever, and workers recycle periodically.
 		"--timeout", envOr("GUNICORN_TIMEOUT", "60"),
-		"--graceful-timeout", envOr("GUNICORN_GRACEFUL_TIMEOUT", "30"),
+		"--graceful-timeout", fmt.Sprint(c.GunicornGracefulTimeout),
 		"--keep-alive", "5",
 		"--limit-request-line", "8190",
 		"--limit-request-fields", "100",
@@ -410,7 +432,7 @@ func runGunicorn(ctx context.Context, c *Config, r *Runner, stopReplication func
 			}
 			status := "status 0"
 			if rerr != nil {
-				status = Redact(rerr.Error())
+				status = rerr.Error() // leaves via Logf, or Errf in main
 			}
 			if c.UpdateMode != "continuous" {
 				Logf("replication (%s) finished: %s", c.UpdateMode, status)
@@ -432,7 +454,7 @@ func runGunicorn(ctx context.Context, c *Config, r *Runner, stopReplication func
 		if replicationDone != nil {
 			select {
 			case <-replicationDone:
-			case <-time.After(shutdownGrace + time.Second):
+			case <-time.After(r.grace() + time.Second):
 			}
 		}
 	}

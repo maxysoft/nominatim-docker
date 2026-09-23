@@ -1,6 +1,6 @@
 # Nominatim with Varnish Cache
 
-This Docker Compose configuration provides a production-ready setup for Nominatim with Varnish 8 as a caching layer.
+This Docker Compose configuration provides a production-ready setup for Nominatim with Varnish as a caching layer.
 
 ## Overview
 
@@ -10,7 +10,7 @@ The `docker-compose-varnish.yml` configuration includes:
 - A one-shot Nominatim import container (full image; provisions and imports, then exits)
 - Nominatim API server on the serve-only image (internal, not exposed; no import tooling, no admin credentials)
 - An optional replication updater (full image; `--profile updates`)
-- Varnish 8 cache server (exposed on port 80)
+- Varnish cache server (exposed on port 80)
 
 ## Key Features
 
@@ -65,21 +65,6 @@ curl -I "http://localhost/search.php?q=monaco"
 # Look for X-Cache: HIT or X-Cache: MISS header
 ```
 
-### Monitoring Cache Performance
-
-Check if requests are being cached:
-
-```bash
-# First request (cache MISS)
-curl -I "http://localhost/search.php?q=monaco" | grep X-Cache
-# Output: X-Cache: MISS
-
-# Second request (cache HIT)
-curl -I "http://localhost/search.php?q=monaco" | grep X-Cache
-# Output: X-Cache: HIT
-# Output: X-Cache-Hits: 1
-```
-
 ### Accessing Varnish Stats
 
 To view Varnish statistics:
@@ -88,10 +73,17 @@ To view Varnish statistics:
 docker exec nominatim-varnish varnishstat
 ```
 
-## Configuration Files
+### Purging the cache
 
-- `docker-compose-varnish.yml` - Main Docker Compose configuration
-- `varnish.vcl` - Varnish Cache Language configuration defining caching rules
+Cached responses are not invalidated when replication updates the database. Ban them by hand; the
+VCL sorts query parameters, so an exact URL has to be given in sorted form:
+
+```bash
+docker exec nominatim-varnish varnishadm "ban req.url ~ ^/search"
+docker exec nominatim-varnish varnishadm "ban req.url == /search?limit=10&q=london"
+docker exec nominatim-varnish varnishadm ban.list
+curl -I "http://localhost/search?q=london&limit=10"  # expect X-Cache: MISS
+```
 
 ## Customization
 
@@ -129,35 +121,22 @@ nominatim-varnish:
 
 ## Production Considerations
 
-1. **Cache Invalidation**: The current setup doesn't automatically invalidate cache when database updates occur. For frequently updated databases, consider:
-   - Reducing TTLs
-   - Implementing a cache invalidation mechanism
-   - Using replication webhooks to purge cache
-
-2. **Memory Sizing**: The default 1GB cache is suitable for small to medium datasets. For larger deployments:
-   - Increase `VARNISH_SIZE` based on available memory
-   - Monitor cache hit rates with `varnishstat`
-   - Aim for >80% cache hit rate
-
-3. **Security**:
-   - Change default passwords in the configuration
-   - Consider adding rate limiting
-   - Use HTTPS with a reverse proxy (nginx, traefik) in front of Varnish
-
-4. **Monitoring**: Set up monitoring for:
-   - Cache hit/miss ratios
-   - Backend response times
-   - Memory usage
-   - Request rates
+1. **Cache Invalidation**: Cached responses live for their full TTL even after replication updates
+   the database. Reduce the TTLs for frequently updated data, or ban stale entries (see
+   [Purging the cache](#purging-the-cache)).
+2. **Memory Sizing**: The default 1GB cache suits small to medium datasets. Size `VARNISH_SIZE` for
+   your hit rate, checked with `varnishstat`.
 
 ## Troubleshooting
 
 ### Varnish not starting
 
-Check VCL syntax:
+A VCL that fails to compile leaves the container restarting, so `docker exec` cannot reach it.
+Read the compile error from `docker logs nominatim-varnish`, or check the VCL in a one-off container:
 
 ```bash
-docker exec nominatim-varnish varnishd -C -f /etc/varnish/default.vcl
+docker compose -f contrib/docker-compose-varnish.yml run --rm --no-deps \
+  --entrypoint varnishd nominatim-varnish -C -f /etc/varnish/default.vcl
 ```
 
 ### Low cache hit rate
@@ -168,10 +147,11 @@ docker exec nominatim-varnish varnishd -C -f /etc/varnish/default.vcl
 
 ### Backend connection issues
 
-Check Nominatim is accessible from Varnish:
+The Varnish 9 image ships neither curl nor wget. Check what Varnish sees, then the API itself:
 
 ```bash
-docker exec nominatim-varnish wget -O- http://nominatim:8080/status.php
+docker exec nominatim-varnish varnishadm backend.list
+docker compose -f contrib/docker-compose-varnish.yml exec nominatim nominatim-ctl healthcheck
 ```
 
 ## References

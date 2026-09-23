@@ -17,6 +17,10 @@ import (
 	"time"
 )
 
+// fetchAttempts is the total number of tries per file: a planet PBF takes
+// hours, and one transient reset must not discard it.
+const fetchAttempts = 5
+
 // Downloader fetches files over HTTPS, authenticated by the system CA bundle.
 // One of the fetched artifacts is a SQL dump that is executed against the
 // database, so server authentication is not optional.
@@ -24,9 +28,6 @@ type Downloader struct {
 	Client    *http.Client
 	UserAgent string
 
-	// Attempts is the total number of tries per file: a planet PBF takes
-	// hours, and one transient reset must not discard it.
-	Attempts int
 	// Backoff is the delay before the second attempt, doubled each time.
 	Backoff time.Duration
 	// IdleTimeout aborts an attempt that receives no body bytes for this
@@ -38,20 +39,16 @@ type Downloader struct {
 // no overall deadline, but bounded handshake, response-header and idle-body
 // timeouts so a black-holed or stalled connection cannot hang forever.
 func NewDownloader(userAgent string) *Downloader {
+	// The default transport already honours HTTPS_PROXY/HTTP_PROXY/NO_PROXY, as
+	// curl did, and bounds the dial; its 10s TLS handshake is too short here.
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.TLSHandshakeTimeout = 30 * time.Second
+	t.ResponseHeaderTimeout = 60 * time.Second
 	return &Downloader{
 		UserAgent:   userAgent,
-		Attempts:    5,
 		Backoff:     2 * time.Second,
 		IdleTimeout: 60 * time.Second,
-		Client: &http.Client{
-			Transport: &http.Transport{
-				// HTTPS_PROXY/HTTP_PROXY/NO_PROXY, as curl honoured them.
-				Proxy:                 http.ProxyFromEnvironment,
-				TLSHandshakeTimeout:   30 * time.Second,
-				ResponseHeaderTimeout: 60 * time.Second,
-				IdleConnTimeout:       90 * time.Second,
-			},
-		},
+		Client:      &http.Client{Transport: t},
 	}
 }
 
@@ -65,16 +62,12 @@ func (e errPermanent) Unwrap() error { return e.err }
 // supports it and retrying transient failures. When sha256Hex is non-empty
 // the completed file is verified and removed on mismatch.
 func (d *Downloader) Fetch(ctx context.Context, url, dest, sha256Hex string) error {
-	attempts := d.Attempts
-	if attempts < 1 {
-		attempts = 1
-	}
 	backoff := d.Backoff
 
 	var last error
-	for attempt := 1; attempt <= attempts; attempt++ {
+	for attempt := 1; attempt <= fetchAttempts; attempt++ {
 		if attempt > 1 {
-			Logf("retrying %s (attempt %d/%d) after %v: %v", url, attempt, attempts, backoff, Redact(last.Error()))
+			Logf("retrying %s (attempt %d/%d) after %v: %v", url, attempt, fetchAttempts, backoff, last)
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
@@ -92,7 +85,7 @@ func (d *Downloader) Fetch(ctx context.Context, url, dest, sha256Hex string) err
 		}
 		last = err
 	}
-	return fmt.Errorf("downloading %s failed after %d attempts: %w", url, attempts, last)
+	return fmt.Errorf("downloading %s failed after %d attempts: %w", url, fetchAttempts, last)
 }
 
 // fetchState records what dest holds, so a later run resumes only a partial
@@ -264,12 +257,9 @@ func (d *Downloader) fetchOnce(ctx context.Context, url, dest, sha256Hex string)
 	if err != nil {
 		return errPermanent{err}
 	}
-	var body io.Reader = resp.Body
-	if d.IdleTimeout > 0 {
-		timer := time.AfterFunc(d.IdleTimeout, cancel)
-		defer timer.Stop()
-		body = &idleReader{r: resp.Body, timer: timer, idle: d.IdleTimeout}
-	}
+	timer := time.AfterFunc(d.IdleTimeout, cancel)
+	defer timer.Stop()
+	body := &idleReader{r: resp.Body, timer: timer, idle: d.IdleTimeout}
 	if _, err := io.Copy(f, body); err != nil {
 		f.Close()
 		if ctx.Err() == nil && actx.Err() != nil {
@@ -287,25 +277,13 @@ func (d *Downloader) fetchOnce(ctx context.Context, url, dest, sha256Hex string)
 	return verifyChecksum(dest, sha256Hex)
 }
 
-// parseContentRangeStart extracts START from "bytes START-END/TOTAL".
+// parseContentRangeStart extracts START from "bytes START-END/TOTAL". The
+// caller requires START to equal its own offset, so a loose parse cannot
+// splice bytes.
 func parseContentRangeStart(h string) (int64, bool) {
-	const prefix = "bytes "
-	if !strings.HasPrefix(h, prefix) {
-		return 0, false
-	}
-	spec, _, ok := strings.Cut(strings.TrimPrefix(h, prefix), "/")
-	if !ok {
-		return 0, false
-	}
-	startStr, _, ok := strings.Cut(spec, "-")
-	if !ok {
-		return 0, false
-	}
-	start, err := strconv.ParseInt(startStr, 10, 64)
-	if err != nil {
-		return 0, false
-	}
-	return start, true
+	var start int64
+	n, err := fmt.Sscanf(h, "bytes %d-", &start)
+	return start, err == nil && n == 1
 }
 
 // parseContentRangeTotal extracts TOTAL from "bytes */TOTAL" or
@@ -372,7 +350,7 @@ func (d *Downloader) Reachable(ctx context.Context, url string, attempts int, de
 			Logf("replication URL %s returned %s (attempt %d/%d)", url, resp.Status, i+1, attempts)
 			continue
 		}
-		Logf("replication URL %s unreachable (attempt %d/%d): %v", url, i+1, attempts, Redact(err.Error()))
+		Logf("replication URL %s unreachable (attempt %d/%d): %v", url, i+1, attempts, err)
 	}
 	return false
 }

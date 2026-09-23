@@ -20,12 +20,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # Same digest-pinned golang image as the Makefile and the Dockerfile.
-      - run: make vet test fmt-check
-      - name: Hadolint
-        run: docker run --rm -i hadolint/hadolint:v2.15.1@sha256:32dac94127fd60b7b7e3fbfc65e1383b9b5e25c9bfd7b8536de7a539fe68a12d < Dockerfile
-      - name: ShellCheck
-        run: docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:v0.11.0@sha256:61862eba1fcf09a484ebcc6feea46f1782532571a34ed51fedf90dd25f925a8d test/integration.sh
+      # The Makefile holds the digest-pinned golang, hadolint and shellcheck
+      # images, so CI and local runs cannot drift apart.
+      - run: make vet test fmt-check lint
 
   build:
     name: Build docker image
@@ -43,14 +40,14 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Extract Nominatim Version
         id: get_version
         run: echo "NOMINATIM_VERSION=$(grep -oP '(?<=ARG NOMINATIM_VERSION=)[0-9.]+' Dockerfile)" >> $GITHUB_OUTPUT
 
       - name: Build and export image
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           tags: nominatim:${{ steps.get_version.outputs.NOMINATIM_VERSION }}
@@ -63,7 +60,7 @@ jobs:
       # (refusing imports, serving an existing database read-only) is asserted
       # by the integration job (test/integration.sh serve_image).
       - name: Build serve target
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           target: serve
@@ -86,551 +83,226 @@ jobs:
       NOMINATIM_VERSION: ${{ needs.build.outputs.NOMINATIM_VERSION }}
       POSTGRES_PASSWORD: very_secure_password
 
+    # Each scenario runs on its own runner: start-postgres and run-nominatim
+    # use fixed names and port 8080, and nothing needs cleaning up.
     strategy:
       fail-fast: false
       matrix:
         test_scenario:
-          - name: Import with PBF_URL and update
-            commands: |-
-              # Start PostgreSQL with PostGIS and wait until it accepts connections
-              ./start-postgres nominatim-net
-              
-              # get the data from four days ago to make sure there really are updates to apply
-              four_days_ago=`date --date="4 days ago" +%y%m%d`
-              docker run -i --rm --network nominatim-net \
-                --shm-size 1g \
-                -e POSTGRES_HOST=postgres \
-                -e POSTGRES_PORT=5432 \
-                -e POSTGRES_DB=nominatim \
-                -e NOMINATIM_PASSWORD=very_secure_password \
-                -e POSTGRES_ADMIN_PASSWORD=very_secure_password \
-                -e PBF_URL=https://download.geofabrik.de/europe/monaco-${four_days_ago}.osm.pbf \
-                -e REPLICATION_URL=https://download.geofabrik.de/europe/monaco-updates/ \
-                -v nominatim-data:/nominatim \
-                -p 8001:8080 \
-                --name nominatim \
-                nominatim:$NOMINATIM_VERSION &
-
-              ./assert-non-empty-json "http://localhost:8001/search.php?q=avenue%20pasteur"
-              ./assert-non-empty-json "http://localhost:8001/status.php?format=json"
-              docker exec -i -u nominatim nominatim nominatim replication --project-dir /nominatim --once
-              ./assert-non-empty-json "http://localhost:8001/search.php?q=avenue%20pasteur"
-              
-              # Cleanup
-              docker stop nominatim postgres || true
-              docker network rm nominatim-net || true
-          
-          - name: Import with volume mount
-            commands: |-
-              # Start PostgreSQL with PostGIS and wait until it accepts connections
-              ./start-postgres nominatim-net2
-              
-              docker run -i --rm --network nominatim-net2 \
-                --shm-size 1g \
-                -e POSTGRES_HOST=postgres \
-                -e POSTGRES_PORT=5432 \
-                -e POSTGRES_DB=nominatim \
-                -e NOMINATIM_PASSWORD=very_secure_password \
-                -e POSTGRES_ADMIN_PASSWORD=very_secure_password \
-                -e PBF_URL=https://download.geofabrik.de/europe/monaco-latest.osm.pbf \
-                -e REPLICATION_URL=https://download.geofabrik.de/europe/monaco-updates/ \
-                -v nominatim-data2:/nominatim \
-                -p 8002:8080 \
-                --name nominatim \
-                nominatim:$NOMINATIM_VERSION &
-
-              ./assert-non-empty-json "http://localhost:8002/search.php?q=avenue%20pasteur"
-              ./assert-non-empty-json "http://localhost:8002/status.php?format=json"
-              
-              # Cleanup
-              docker stop nominatim postgres || true
-              docker network rm nominatim-net2 || true
-          
+          # Also covers a plain PBF_URL import followed by an update.
           - name: Import with persistent data and container restart
             commands: |-
-              # Start PostgreSQL with PostGIS and wait until it accepts connections
-              ./start-postgres nominatim-net3 postgres-data
+              ./start-postgres
               
               # get the data from four days ago to make sure there really are updates to apply
               four_days_ago=`date --date="4 days ago" +%y%m%d`
-              docker run -i --rm --network nominatim-net3 \
-                --shm-size 1g \
-                -e POSTGRES_HOST=postgres \
-                -e POSTGRES_PORT=5432 \
-                -e POSTGRES_DB=nominatim \
-                -e NOMINATIM_PASSWORD=very_secure_password \
-                -e POSTGRES_ADMIN_PASSWORD=very_secure_password \
+              ./run-nominatim \
                 -e PBF_URL=https://download.geofabrik.de/europe/monaco-${four_days_ago}.osm.pbf \
-                -e REPLICATION_URL=https://download.geofabrik.de/europe/monaco-updates/ \
-                -v nominatim-data3:/nominatim \
-                -p 8003:8080 \
-                --name nominatim \
-                nominatim:$NOMINATIM_VERSION &
+                -e REPLICATION_URL=https://download.geofabrik.de/europe/monaco-updates/ &
 
-              ./assert-non-empty-json "http://localhost:8003/search.php?q=avenue%20pasteur"
-              ./assert-non-empty-json "http://localhost:8003/status.php?format=json"
+              ./assert-json "http://localhost:8080/search.php?q=avenue%20pasteur"
+              ./assert-json "http://localhost:8080/status.php?format=json"
               
-              # Stop containers
+              # Stop and remove, so the second run can take the name; the
+              # nominatim-data volume carries the project dir over.
               docker stop nominatim
-              # the container needs a few seconds to shutdown cleanly apparently
-              sleep 5
+              docker wait nominatim
+              docker rm nominatim
 
               # Start nominatim again with same database
-              docker run -i --rm --network nominatim-net3 \
-                --shm-size 1g \
-                -e POSTGRES_HOST=postgres \
-                -e POSTGRES_PORT=5432 \
-                -e POSTGRES_DB=nominatim \
-                -e NOMINATIM_PASSWORD=very_secure_password \
-                -e POSTGRES_ADMIN_PASSWORD=very_secure_password \
+              ./run-nominatim \
                 -e PBF_URL=https://download.geofabrik.de/europe/monaco-${four_days_ago}.osm.pbf \
-                -e REPLICATION_URL=https://download.geofabrik.de/europe/monaco-updates/ \
-                -v nominatim-data3:/nominatim \
-                -p 8004:8080 \
-                --name nominatim \
-                nominatim:$NOMINATIM_VERSION &
+                -e REPLICATION_URL=https://download.geofabrik.de/europe/monaco-updates/ &
 
-              ./assert-non-empty-json "http://localhost:8004/search.php?q=avenue%20pasteur"
+              ./assert-json "http://localhost:8080/search.php?q=avenue%20pasteur"
               # The second start must reuse the import, not run it again.
-              docker logs nominatim > /tmp/restart.log 2>&1
-              grep -q "existing Nominatim import found" /tmp/restart.log || { echo "FAIL: restart did not skip the import"; exit 1; }
+              ./wait-log "existing Nominatim import found"
               docker exec -i -u nominatim nominatim nominatim replication --project-dir /nominatim --once
-              ./assert-non-empty-json "http://localhost:8004/search.php?q=avenue%20pasteur"
-              
-              # Cleanup
-              docker stop nominatim postgres || true
-              docker network rm nominatim-net3 || true
+              ./assert-json "http://localhost:8080/search.php?q=avenue%20pasteur"
 
           - name: UPDATE_MODE=once
             commands: |-
-              # Start PostgreSQL with PostGIS and wait until it accepts connections
-              ./start-postgres nominatim-net-update1 postgres-data-update1
+              ./start-postgres
               
               # get the data from four days ago to make sure there really are updates to apply
               four_days_ago=`date --date="4 days ago" +%y%m%d`
-              docker run -i --rm --network nominatim-net-update1 \
-                --shm-size 1g \
-                -e POSTGRES_HOST=postgres \
-                -e POSTGRES_PORT=5432 \
-                -e POSTGRES_DB=nominatim \
-                -e NOMINATIM_PASSWORD=very_secure_password \
-                -e POSTGRES_ADMIN_PASSWORD=very_secure_password \
+              ./run-nominatim \
                 -e PBF_URL=https://download.geofabrik.de/europe/monaco-${four_days_ago}.osm.pbf \
                 -e REPLICATION_URL=https://download.geofabrik.de/europe/monaco-updates/ \
-                -e UPDATE_MODE=once \
-                -v nominatim-data-update1:/nominatim \
-                -p 8020:8080 \
-                --name nominatim \
-                nominatim:$NOMINATIM_VERSION &
+                -e UPDATE_MODE=once &
 
-              ./assert-non-empty-json "http://localhost:8020/search.php?q=avenue%20pasteur"
-              ./assert-non-empty-json "http://localhost:8020/status.php?format=json"
+              ./assert-json "http://localhost:8080/search.php?q=avenue%20pasteur"
+              ./assert-json "http://localhost:8080/status.php?format=json"
               # Replication output goes to the container's stdout now, not to an
               # unrotated /var/log/replication.log inside the container.
-              # Polled rather than `docker logs -f | grep -m1`: that pipeline
-              # reports the timeout's exit status even when it matches.
-              echo -n "check replication log for Update completed. Count:"
-              replicated=0
-              for _ in $(seq 1 60); do
-                if docker logs nominatim 2>&1 | grep -c "Update completed."; then
-                  replicated=1
-                  break
-                fi
-                sleep 5
-              done
-              if [ "$replicated" -ne 1 ]; then
-                echo "replication never reported completion"
-                docker logs --tail 50 nominatim
-                exit 1
-              fi
-              
-              # Cleanup
-              docker stop nominatim postgres || true
-              docker network rm nominatim-net-update1 || true
+              ./wait-log "Update completed."
 
           - name: UPDATE_MODE=continuous
             commands: |-
-              # Start PostgreSQL with PostGIS and wait until it accepts connections
-              ./start-postgres nominatim-net-update2 postgres-data-update2
+              ./start-postgres
               
               # get the data from few days ago to make sure there really are updates to apply
               days_ago=`date --date="4 days ago" +%y%m%d`
-              docker run -i --rm --network nominatim-net-update2 \
-                --shm-size 1g \
-                -e POSTGRES_HOST=postgres \
-                -e POSTGRES_PORT=5432 \
-                -e POSTGRES_DB=nominatim \
-                -e NOMINATIM_PASSWORD=very_secure_password \
-                -e POSTGRES_ADMIN_PASSWORD=very_secure_password \
+              ./run-nominatim \
                 -e PBF_URL=https://download.geofabrik.de/europe/monaco-${days_ago}.osm.pbf \
                 -e REPLICATION_URL=https://download.geofabrik.de/europe/monaco-updates/ \
-                -e UPDATE_MODE=continuous \
-                -v nominatim-data-update2:/nominatim \
-                -p 8021:8080 \
-                --name nominatim \
-                nominatim:$NOMINATIM_VERSION &
+                -e UPDATE_MODE=continuous &
 
-              ./assert-non-empty-json "http://localhost:8021/search.php?q=avenue%20pasteur"
-              ./assert-non-empty-json "http://localhost:8021/status.php?format=json"
+              ./assert-json "http://localhost:8080/search.php?q=avenue%20pasteur"
+              ./assert-json "http://localhost:8080/status.php?format=json"
               # Replication output goes to the container's stdout now, not to an
               # unrotated /var/log/replication.log inside the container.
-              # Polled rather than `docker logs -f | grep -m1`: that pipeline
-              # reports the timeout's exit status even when it matches.
-              echo -n "check replication log for Update completed. Count:"
-              replicated=0
-              for _ in $(seq 1 60); do
-                if docker logs nominatim 2>&1 | grep -c "Update completed."; then
-                  replicated=1
-                  break
-                fi
-                sleep 5
-              done
-              if [ "$replicated" -ne 1 ]; then
-                echo "replication never reported completion"
-                docker logs --tail 50 nominatim
-                exit 1
-              fi
-              
-              # Cleanup
-              docker stop nominatim postgres || true
-              docker network rm nominatim-net-update2 || true
+              ./wait-log "Update completed."
 
-          - name: Import full style
-            commands: |-
-              # Start PostgreSQL with PostGIS and wait until it accepts connections
-              ./start-postgres nominatim-net4
-              
-              docker run -i --rm --network nominatim-net4 \
-                --shm-size 1g \
-                -e POSTGRES_HOST=postgres \
-                -e POSTGRES_PORT=5432 \
-                -e POSTGRES_DB=nominatim \
-                -e NOMINATIM_PASSWORD=very_secure_password \
-                -e POSTGRES_ADMIN_PASSWORD=very_secure_password \
-                -e PBF_URL=https://download.geofabrik.de/europe/monaco-latest.osm.pbf \
-                -e REPLICATION_URL=https://download.geofabrik.de/europe/monaco-updates/ \
-                -e IMPORT_STYLE=full \
-                -v nominatim-data4:/nominatim \
-                -p 8005:8080 \
-                --name nominatim \
-                nominatim:$NOMINATIM_VERSION &
-
-              ./assert-non-empty-json "http://localhost:8005/search.php?q=hotel%20de%20paris"
-              ./assert-non-empty-json "http://localhost:8005/status.php?format=json"
-              
-              # Cleanup
-              docker stop nominatim postgres || true
-              docker network rm nominatim-net4 || true
-          
           - name: Import admin style
             commands: |-
-              # Start PostgreSQL with PostGIS and wait until it accepts connections
-              ./start-postgres nominatim-net5
+              ./start-postgres
               
-              docker run -i --rm --network nominatim-net5 \
-                --shm-size 1g \
-                -e POSTGRES_HOST=postgres \
-                -e POSTGRES_PORT=5432 \
-                -e POSTGRES_DB=nominatim \
-                -e NOMINATIM_PASSWORD=very_secure_password \
-                -e POSTGRES_ADMIN_PASSWORD=very_secure_password \
+              ./run-nominatim \
                 -e PBF_URL=https://download.geofabrik.de/europe/monaco-latest.osm.pbf \
                 -e REPLICATION_URL=https://download.geofabrik.de/europe/monaco-updates/ \
-                -e IMPORT_STYLE=admin \
-                -v nominatim-data5:/nominatim \
-                -p 8006:8080 \
-                --name nominatim \
-                nominatim:$NOMINATIM_VERSION &
+                -e IMPORT_STYLE=admin &
 
-              ./assert-empty-json "http://localhost:8006/search.php?q=hotel%20de%20paris"
-              ./assert-non-empty-json "http://localhost:8006/status.php?format=json"
-              
-              # Cleanup
-              docker stop nominatim postgres || true
-              docker network rm nominatim-net5 || true
+              # First the long-retry check, which covers the import itself.
+              ./assert-json "http://localhost:8080/status.php?format=json"
+              ./assert-json "http://localhost:8080/search.php?q=hotel%20de%20paris" --empty
+              # Admin style keeps boundaries, so search must still find them.
+              ./assert-json "http://localhost:8080/search.php?q=Monaco&format=json&limit=1" "class" "^boundary$"
 
           - name: Import with PBF_PATH
             commands: |-
-              # Start PostgreSQL with PostGIS and wait until it accepts connections
-              ./start-postgres nominatim-net6
+              ./start-postgres
               
               wget --cut-dirs=1 -nH -xP /tmp/data https://download.geofabrik.de/europe/monaco-latest.osm.pbf
-              docker run -i --rm --network nominatim-net6 \
-                --shm-size 1g \
-                -e POSTGRES_HOST=postgres \
-                -e POSTGRES_PORT=5432 \
-                -e POSTGRES_DB=nominatim \
-                -e NOMINATIM_PASSWORD=very_secure_password \
-                -e POSTGRES_ADMIN_PASSWORD=very_secure_password \
+              ./run-nominatim \
                 -e PBF_PATH=/nominatim/data/monaco-latest.osm.pbf \
                 -e REPLICATION_URL=https://download.geofabrik.de/europe/monaco-updates/ \
-                -v nominatim-data6:/nominatim \
-                -v /tmp/data:/nominatim/data \
-                -p 8007:8080 \
-                --name nominatim \
-                nominatim:$NOMINATIM_VERSION &
+                -v /tmp/data:/nominatim/data &
 
-              ./assert-non-empty-json "http://localhost:8007/search.php?q=avenue%20pasteur"
-              ./assert-non-empty-json "http://localhost:8007/status.php?format=json"
-              
-              # Cleanup
-              docker stop nominatim postgres || true
-              docker network rm nominatim-net6 || true
-
-          - name: REPLICATION_URL is blank
-            commands: |-
-              # Start PostgreSQL with PostGIS and wait until it accepts connections
-              ./start-postgres nominatim-net7
-              
-              docker run -i --rm --network nominatim-net7 \
-                --shm-size 1g \
-                -e POSTGRES_HOST=postgres \
-                -e POSTGRES_PORT=5432 \
-                -e POSTGRES_DB=nominatim \
-                -e NOMINATIM_PASSWORD=very_secure_password \
-                -e POSTGRES_ADMIN_PASSWORD=very_secure_password \
-                -e PBF_URL=https://download.geofabrik.de/europe/monaco-latest.osm.pbf \
-                -v nominatim-data7:/nominatim \
-                -p 8008:8080 \
-                --name nominatim \
-                nominatim:$NOMINATIM_VERSION &
-
-              ./assert-non-empty-json "http://localhost:8008/search.php?q=avenue%20pasteur"
-              ./assert-non-empty-json "http://localhost:8008/status.php?format=json"
-              
-              # Cleanup
-              docker stop nominatim postgres || true
-              docker network rm nominatim-net7 || true
+              ./assert-json "http://localhost:8080/search.php?q=avenue%20pasteur"
+              ./assert-json "http://localhost:8080/status.php?format=json"
 
           - name: FREEZE
             commands: |-
-              # Start PostgreSQL with PostGIS and wait until it accepts connections
-              ./start-postgres nominatim-net8
+              ./start-postgres
               
-              docker run -i --rm --network nominatim-net8 \
-                --shm-size 1g \
-                -e POSTGRES_HOST=postgres \
-                -e POSTGRES_PORT=5432 \
-                -e POSTGRES_DB=nominatim \
-                -e NOMINATIM_PASSWORD=very_secure_password \
-                -e POSTGRES_ADMIN_PASSWORD=very_secure_password \
+              ./run-nominatim \
                 -e PBF_URL=https://download.geofabrik.de/europe/monaco-latest.osm.pbf \
-                -e FREEZE="true" \
-                -v nominatim-data8:/nominatim \
-                -p 8009:8080 \
-                --name nominatim \
-                nominatim:$NOMINATIM_VERSION &
+                -e FREEZE="true" &
 
-              ./assert-non-empty-json "http://localhost:8009/search.php?q=avenue%20pasteur"
-              ./assert-non-empty-json "http://localhost:8009/status.php?format=json"
-              
-              # Cleanup
-              docker stop nominatim postgres || true
-              docker network rm nominatim-net8 || true
+              ./assert-json "http://localhost:8080/search.php?q=avenue%20pasteur"
+              ./assert-json "http://localhost:8080/status.php?format=json"
 
           - name: GB postcode import
             commands: |-
-              # Start PostgreSQL with PostGIS and wait until it accepts connections
-              ./start-postgres nominatim-net9
+              ./start-postgres
               
-              docker run -i --rm --network nominatim-net9 \
-                --shm-size 1g \
-                -e POSTGRES_HOST=postgres \
-                -e POSTGRES_PORT=5432 \
-                -e POSTGRES_DB=nominatim \
-                -e NOMINATIM_PASSWORD=very_secure_password \
-                -e POSTGRES_ADMIN_PASSWORD=very_secure_password \
+              ./run-nominatim \
                 -e PBF_URL=https://download.geofabrik.de/europe/united-kingdom/england/rutland-latest.osm.pbf \
-                -e IMPORT_GB_POSTCODES="true" \
-                -v nominatim-data9:/nominatim \
-                -p 8010:8080 \
-                --name nominatim \
-                nominatim:$NOMINATIM_VERSION &
+                -e IMPORT_GB_POSTCODES="true" &
 
-              ./assert-non-empty-json "http://localhost:8010/search.php?postalcode=LE15+8TX"
-              ./assert-non-empty-json "http://localhost:8010/status.php?format=json"
+              ./assert-json "http://localhost:8080/search.php?postalcode=LE15+8TX"
+              ./assert-json "http://localhost:8080/status.php?format=json"
               # PE9 3SY was retired from the ONS dataset and is absent from the current
               # gb_postcodes.csv.gz; PE9 3AL is the nearest surviving PE9 3* postcode.
-              ./assert-non-empty-json "http://localhost:8010/search.php?postalcode=PE9+3AL"
-              ./assert-non-empty-json "http://localhost:8010/search.php?postalcode=PE9+4ES"
-              
-              # Cleanup
-              docker stop nominatim postgres || true
-              docker network rm nominatim-net9 || true
-  
+              ./assert-json "http://localhost:8080/search.php?postalcode=PE9+3AL"
+              ./assert-json "http://localhost:8080/search.php?postalcode=PE9+4ES"
+
           - name: REVERSE_ONLY
             commands: |-
-              # Start PostgreSQL with PostGIS and wait until it accepts connections
-              ./start-postgres nominatim-net10
+              ./start-postgres
               
-              docker run -i --rm --network nominatim-net10 \
-                --shm-size 1g \
-                -e POSTGRES_HOST=postgres \
-                -e POSTGRES_PORT=5432 \
-                -e POSTGRES_DB=nominatim \
-                -e NOMINATIM_PASSWORD=very_secure_password \
-                -e POSTGRES_ADMIN_PASSWORD=very_secure_password \
+              ./run-nominatim \
                 -e PBF_URL=https://download.geofabrik.de/europe/monaco-latest.osm.pbf \
-                -e REVERSE_ONLY="true" \
-                -v nominatim-data10:/nominatim \
-                -p 8011:8080 \
-                --name nominatim \
-                nominatim:$NOMINATIM_VERSION &
+                -e REVERSE_ONLY="true" &
 
-              ./assert-non-empty-json "http://localhost:8011/reverse.php?lat=43.734&lon=7.42&format=jsonv2"
-              ./assert-non-empty-json "http://localhost:8011/status.php?format=json"
-              
-              # Cleanup
-              docker stop nominatim postgres || true
-              docker network rm nominatim-net10 || true
-          
+              ./assert-json "http://localhost:8080/reverse.php?lat=43.734&lon=7.42&format=jsonv2"
+              ./assert-json "http://localhost:8080/reverse.php?lat=43.7314&lon=7.4197&format=jsonv2" "display_name" "Monaco"
+              ./assert-json "http://localhost:8080/status.php?format=json"
+
+          # Also covers a blank REPLICATION_URL and the WARMUP_ON_STARTUP=false default.
           - name: Check for clean shutdown
             commands: |-
-              # Start PostgreSQL with PostGIS and wait until it accepts connections
-              ./start-postgres nominatim-net11
+              ./start-postgres
               
-              docker run --detach --network nominatim-net11 \
-                --shm-size 1g \
-                -e POSTGRES_HOST=postgres \
-                -e POSTGRES_PORT=5432 \
-                -e POSTGRES_DB=nominatim \
-                -e NOMINATIM_PASSWORD=very_secure_password \
-                -e POSTGRES_ADMIN_PASSWORD=very_secure_password \
-                -e PBF_URL=https://download.geofabrik.de/europe/monaco-latest.osm.pbf \
-                -v nominatim-data11:/nominatim \
-                -p 8012:8080 \
-                --name nominatim \
-                nominatim:$NOMINATIM_VERSION
+              ./run-nominatim --detach \
+                -e PBF_URL=https://download.geofabrik.de/europe/monaco-latest.osm.pbf
             
-              ./assert-non-empty-json "http://localhost:8012/search.php?q=avenue%20pasteur"
-              ./assert-non-empty-json "http://localhost:8012/status.php?format=json"
+              ./assert-json "http://localhost:8080/search.php?q=avenue%20pasteur"
+              ./assert-json "http://localhost:8080/status.php?format=json"
+              ./wait-log "Skipping cache warmup"
               # Shutdown the container
               docker stop -t 60 nominatim
               # Verify that the exit code is zero
               CONTAINER_EXIT_CODE=$(docker inspect nominatim --format='{{.State.ExitCode}}')
               test "$CONTAINER_EXIT_CODE" -eq 0
-              
-              # Cleanup
-              docker rm nominatim || true
-              docker stop postgres || true
-              docker network rm nominatim-net11 || true
 
           - name: WARMUP_ON_STARTUP=true
             commands: |-
-              # Start PostgreSQL with PostGIS and wait until it accepts connections
-              ./start-postgres nominatim-net12
+              ./start-postgres
               
-              docker run -i --rm --network nominatim-net12 \
-                --shm-size 1g \
-                -e POSTGRES_HOST=postgres \
-                -e POSTGRES_PORT=5432 \
-                -e POSTGRES_DB=nominatim \
-                -e NOMINATIM_PASSWORD=very_secure_password \
-                -e POSTGRES_ADMIN_PASSWORD=very_secure_password \
+              ./run-nominatim \
                 -e PBF_URL=https://download.geofabrik.de/europe/monaco-latest.osm.pbf \
-                -e WARMUP_ON_STARTUP=true \
-                -v nominatim-data12:/nominatim \
-                -p 8013:8080 \
-                --name nominatim \
-                nominatim:$NOMINATIM_VERSION &
+                -e WARMUP_ON_STARTUP=true &
 
-              ./assert-non-empty-json "http://localhost:8013/search.php?q=avenue%20pasteur"
-              ./assert-non-empty-json "http://localhost:8013/status.php?format=json"
-              docker logs nominatim | grep "Warming finished"
-              
-              # Cleanup
-              docker stop nominatim postgres || true
-              docker network rm nominatim-net12 || true
+              ./assert-json "http://localhost:8080/search.php?q=avenue%20pasteur"
+              ./assert-json "http://localhost:8080/status.php?format=json"
+              ./wait-log "Warming finished"
 
-          - name: WARMUP_ON_STARTUP=false
-            commands: |-
-              # Start PostgreSQL with PostGIS and wait until it accepts connections
-              ./start-postgres nominatim-net13
-              
-              docker run -i --rm --network nominatim-net13 \
-                --shm-size 1g \
-                -e POSTGRES_HOST=postgres \
-                -e POSTGRES_PORT=5432 \
-                -e POSTGRES_DB=nominatim \
-                -e NOMINATIM_PASSWORD=very_secure_password \
-                -e POSTGRES_ADMIN_PASSWORD=very_secure_password \
-                -e PBF_URL=https://download.geofabrik.de/europe/monaco-latest.osm.pbf \
-                -e WARMUP_ON_STARTUP=false \
-                -v nominatim-data13:/nominatim \
-                -p 8014:8080 \
-                --name nominatim \
-                nominatim:$NOMINATIM_VERSION &
-
-              ./assert-non-empty-json "http://localhost:8014/search.php?q=avenue%20pasteur"
-              ./assert-non-empty-json "http://localhost:8014/status.php?format=json"
-              docker logs nominatim | grep "Skipping cache warmup"
-              
-              # Cleanup
-              docker stop nominatim postgres || true
-              docker network rm nominatim-net13 || true
-
+          # Also covers the default (full) import style and a volume-mounted project dir.
           - name: API endpoints coverage
             commands: |-
-              # Start PostgreSQL with PostGIS and wait until it accepts connections
-              ./start-postgres nominatim-net14
+              ./start-postgres
               
-              docker run -i --rm --network nominatim-net14 \
-                --shm-size 1g \
-                -e POSTGRES_HOST=postgres \
-                -e POSTGRES_PORT=5432 \
-                -e POSTGRES_DB=nominatim \
-                -e NOMINATIM_PASSWORD=very_secure_password \
-                -e POSTGRES_ADMIN_PASSWORD=very_secure_password \
+              ./run-nominatim \
                 -e PBF_URL=https://download.geofabrik.de/europe/monaco-latest.osm.pbf \
-                -e REPLICATION_URL=https://download.geofabrik.de/europe/monaco-updates/ \
-                -v nominatim-data14:/nominatim \
-                -p 8015:8080 \
-                --name nominatim \
-                nominatim:$NOMINATIM_VERSION &
+                -e REPLICATION_URL=https://download.geofabrik.de/europe/monaco-updates/ &
 
               # /status endpoint: verify service is up, status=0, and version matches
-              ./assert-non-empty-json "http://localhost:8015/status.php?format=json"
-              ./assert-json-field "http://localhost:8015/status.php?format=json" "status" "^0$"
-              ./assert-json-field "http://localhost:8015/status.php?format=json" "software_version" "^5\."
-              ./assert-json-field "http://localhost:8015/status.php?format=json" "database_version" "^5\."
+              ./assert-json "http://localhost:8080/status.php?format=json"
+              ./assert-json "http://localhost:8080/status.php?format=json" "status" "^0$"
+              ./assert-json "http://localhost:8080/status.php?format=json" "software_version" "^5\."
+              ./assert-json "http://localhost:8080/status.php?format=json" "database_version" "^5\."
 
               # /search endpoint: verify avenue pasteur returns results
-              ./assert-non-empty-json "http://localhost:8015/search.php?q=avenue%20pasteur"
+              ./assert-json "http://localhost:8080/search.php?q=avenue%20pasteur"
+              # the full style imports POIs; admin style asserts the opposite
+              ./assert-json "http://localhost:8080/search.php?q=hotel%20de%20paris"
               # verify Monaco country result has correct place_rank and class
-              ./assert-json-field "http://localhost:8015/search.php?q=Monaco&format=json&limit=1" "name" "^Monaco$"
-              ./assert-json-field "http://localhost:8015/search.php?q=Monaco&format=json&limit=1" "class" "^boundary$"
-              ./assert-json-field "http://localhost:8015/search.php?q=Monaco&format=json&limit=1" "place_rank" "^4$"
+              ./assert-json "http://localhost:8080/search.php?q=Monaco&format=json&limit=1" "name" "^Monaco$"
+              ./assert-json "http://localhost:8080/search.php?q=Monaco&format=json&limit=1" "class" "^boundary$"
+              ./assert-json "http://localhost:8080/search.php?q=Monaco&format=json&limit=1" "place_rank" "^4$"
               # verify addressdetails returns country field
-              ./assert-json-field "http://localhost:8015/search.php?q=avenue%20pasteur&format=json&limit=1&addressdetails=1" "address.country" "Monaco"
+              ./assert-json "http://localhost:8080/search.php?q=avenue%20pasteur&format=json&limit=1&addressdetails=1" "address.country" "Monaco"
               # verify polygon_geojson is returned
-              ./assert-json-field "http://localhost:8015/search.php?q=Monaco&format=json&limit=1&polygon_geojson=1" "geojson.type" "olygon"
+              ./assert-json "http://localhost:8080/search.php?q=Monaco&format=json&limit=1&polygon_geojson=1" "geojson.type" "olygon"
               # verify structured query (city+country) returns results
-              ./assert-json-field "http://localhost:8015/search.php?city=Monaco&country=Monaco&format=json" "place_id" "."
+              ./assert-json "http://localhost:8080/search.php?city=Monaco&country=Monaco&format=json" "place_id" "."
 
               # /reverse endpoint: verify Palace of Monaco resolves to Monaco
-              ./assert-non-empty-json "http://localhost:8015/reverse.php?lat=43.734&lon=7.42&format=json"
-              ./assert-json-field "http://localhost:8015/reverse.php?lat=43.7314&lon=7.4197&format=json" "display_name" "Monaco"
-              ./assert-json-field "http://localhost:8015/reverse.php?lat=43.7314&lon=7.4197&format=json" "address.country" "Monaco"
+              ./assert-json "http://localhost:8080/reverse.php?lat=43.734&lon=7.42&format=json"
+              ./assert-json "http://localhost:8080/reverse.php?lat=43.7314&lon=7.4197&format=json" "display_name" "Monaco"
+              ./assert-json "http://localhost:8080/reverse.php?lat=43.7314&lon=7.4197&format=json" "address.country" "Monaco"
 
               # /lookup endpoint: verify OSM way and Monaco country relation
-              ./assert-non-empty-json "http://localhost:8015/lookup.php?osm_ids=W201009264&format=json"
-              ./assert-json-field "http://localhost:8015/lookup.php?osm_ids=R1124039&format=json" "osm_type" "^relation$"
-              ./assert-json-field "http://localhost:8015/lookup.php?osm_ids=R1124039&format=json" "name" "^Monaco$"
+              ./assert-json "http://localhost:8080/lookup.php?osm_ids=W201009264&format=json"
+              ./assert-json "http://localhost:8080/lookup.php?osm_ids=R1124039&format=json" "osm_type" "^relation$"
+              ./assert-json "http://localhost:8080/lookup.php?osm_ids=R1124039&format=json" "name" "^Monaco$"
 
               # /details endpoint: verify Monaco country via osmtype+osmid
-              ./assert-json-field "http://localhost:8015/details.php?osmtype=R&osmid=1124039&format=json" "localname" "^Monaco$"
-              ./assert-json-field "http://localhost:8015/details.php?osmtype=R&osmid=1124039&format=json" "category" "^boundary$"
+              ./assert-json "http://localhost:8080/details.php?osmtype=R&osmid=1124039&format=json" "localname" "^Monaco$"
+              ./assert-json "http://localhost:8080/details.php?osmtype=R&osmid=1124039&format=json" "category" "^boundary$"
 
-              # verify Content-Type: application/json header
-              CT=$(curl -sI "http://localhost:8015/search.php?q=Monaco&format=json" | grep -i "content-type")
-              echo "$CT" | grep -qi "application/json" && echo "✅ Content-Type: application/json" || (echo "FAIL: Content-Type header: $CT"; exit 1)
+              # verify Content-Type: application/json header. GET, not HEAD:
+              # Nominatim answers HEAD with a 405 whose error body is JSON too.
+              CT=$(curl -s -o /dev/null -w '%{content_type}' "http://localhost:8080/search.php?q=Monaco&format=json")
+              case "$CT" in
+                application/json*) echo "✅ Content-Type: $CT" ;;
+                *) echo "FAIL: Content-Type header: $CT"; exit 1 ;;
+              esac
 
               # Run database health check inside the container
               docker exec -u nominatim nominatim nominatim admin --check-database --project-dir /nominatim
-              
-              # Cleanup
-              docker stop nominatim postgres || true
-              docker network rm nominatim-net14 || true
     
     steps:
       - name: Download artifact
@@ -679,7 +351,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Get commit short reference
         id: get_commit
@@ -731,7 +403,7 @@ jobs:
       # and is not tested.
       - name: Build and push to Docker Hub
         if: ${{ github.repository_owner == 'maxysoft' }}
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           platforms: linux/amd64,linux/arm64
@@ -750,7 +422,7 @@ jobs:
 
       - name: Build and push serve image to Docker Hub
         if: ${{ github.repository_owner == 'maxysoft' }}
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           target: serve
@@ -769,7 +441,7 @@ jobs:
             org.opencontainers.image.version=${{ steps.get_version.outputs.NOMINATIM_VERSION }}
 
       - name: Build and push to GitHub Container Registry
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           platforms: linux/amd64,linux/arm64
@@ -787,7 +459,7 @@ jobs:
             org.opencontainers.image.version=${{ steps.get_version.outputs.NOMINATIM_VERSION }}
 
       - name: Build and push serve image to GitHub Container Registry
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           target: serve

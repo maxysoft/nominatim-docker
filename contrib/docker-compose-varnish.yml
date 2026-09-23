@@ -5,7 +5,7 @@
 #
 #   docker compose -f contrib/docker-compose-varnish.yml run --rm nominatim-import reimport
 #
-# Varnish 8 caches the API in front of the nominatim service; see
+# Varnish 9 caches the API in front of the nominatim service; see
 # README-varnish.md.
 
 x-logging: &logging
@@ -21,6 +21,9 @@ x-logging: &logging
 # /nominatim, /tmp, $HOME (tmpfs) and /dev/shm are written.
 x-nominatim: &nominatim
   init: true
+  # Docker's 10 s default would SIGKILL Gunicorn mid-drain and replication
+  # mid-diff; keep it above GUNICORN_GRACEFUL_TIMEOUT + 5 s.
+  stop_grace_period: 40s
   security_opt:
     - no-new-privileges:true
   read_only: true
@@ -58,6 +61,23 @@ x-replication: &replication
   # default, the CPU allowance, is twice the physical cores on an SMT host.
   THREADS: 4
 
+# The full image, as the import and the updater run it. The image healthcheck
+# probes the API, which neither container runs.
+x-full: &full
+  image: ghcr.io/maxysoft/nominatim-docker:latest
+  healthcheck:
+    disable: true
+  volumes:
+    - nominatim-data:/nominatim
+
+# The API and the updater wait for a healthy database and a finished import.
+x-after-import: &after-import
+  nominatim-postgres:
+    condition: service_healthy
+    restart: true
+  nominatim-import:
+    condition: service_completed_successfully
+
 services:
   nominatim-postgres:
     image: postgis/postgis:18-3.6-alpine@sha256:ffcf0c4b904e41b9779f8098007fb5a9484025319c18c70cf8e1bcebb742b9b7
@@ -91,15 +111,12 @@ services:
     networks:
       - nominatim-net
 
-  # Runs once. The image healthcheck probes the API, which this container never runs.
+  # Runs once.
   nominatim-import:
-    <<: *nominatim
-    image: ghcr.io/maxysoft/nominatim-docker:latest
+    <<: [*nominatim, *full]
     container_name: nominatim-import
     command: import
     restart: "no"
-    healthcheck:
-      disable: true
     environment:
       <<: [*database, *replication]
       POSTGRES_ADMIN_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:?set POSTGRES_ADMIN_PASSWORD in .env}
@@ -109,8 +126,6 @@ services:
       # Importance data. Without it search-result ranking is degraded and
       # `nominatim admin --check-database` reports the tables as missing.
       IMPORT_WIKIPEDIA: "true"
-    volumes:
-      - nominatim-data:/nominatim
     depends_on:
       nominatim-postgres:
         condition: service_healthy
@@ -131,56 +146,45 @@ services:
       NOMINATIM_API_POOL_SIZE: 5
     volumes:
       - nominatim-serve-data:/nominatim
-    depends_on:
-      nominatim-postgres:
-        condition: service_healthy
-        restart: true
-      nominatim-import:
-        condition: service_completed_successfully
+    depends_on: *after-import
 
   # Optional (--profile updates). on-failure: once/catch-up exit 0 when done.
   nominatim-updater:
-    <<: *nominatim
+    <<: [*nominatim, *full]
     profiles:
       - updates
-    image: ghcr.io/maxysoft/nominatim-docker:latest
     container_name: nominatim-updater
     command: replicate
     restart: on-failure
-    healthcheck:
-      disable: true
     environment:
       <<: [*database, *replication]
       UPDATE_MODE: continuous
-    volumes:
-      - nominatim-data:/nominatim
-    depends_on:
-      nominatim-postgres:
-        condition: service_healthy
-        restart: true
-      nominatim-import:
-        condition: service_completed_successfully
+    depends_on: *after-import
 
   nominatim-varnish:
-    image: varnish:8.0.1-alpine@sha256:0860b5e9f5535e373080f6921bdb68959dc93c300da569107cfedc45fe236e67
+    image: varnish:9.0.4@sha256:73d7da8ba87f83564131a79b7901f14bc36937a4e2a11b8f90940855b144b4a5
     container_name: nominatim-varnish
     hostname: nominatim-varnish
     restart: unless-stopped
-    command: ["-p", "default_ttl=3600", "-p", "default_grace=3600"]
     volumes:
       - ./varnish.vcl:/etc/varnish/default.vcl:ro
     ports:
       - "80:80"
     environment:
       VARNISH_SIZE: 1G
-    cap_add:
-      - IPC_LOCK
+    # Varnish mlock()s only its shared-memory log, never the cache, so this is
+    # sized like the packaged varnish.service (LimitMEMLOCK=100M), not to
+    # VARNISH_SIZE.
     ulimits:
       memlock:
-        soft: 1207959552
-        hard: 1207959552
+        soft: 104857600
+        hard: 104857600
+    # Varnish resolves the backend host once, at VCL load: restart it whenever
+    # Compose recreates the API, or it keeps the old container's address.
     depends_on:
-      - nominatim
+      nominatim:
+        condition: service_started
+        restart: true
     <<: *logging
     networks:
       - nominatim-net

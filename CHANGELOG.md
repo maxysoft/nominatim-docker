@@ -11,225 +11,92 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Full rationale, parity matrix and migration steps: [docs/REFACTOR.md](docs/REFACTOR.md).
 
-- **Changed:** Replaced `config.sh`, `init.sh` and `start.sh` (439 lines of bash) with `nominatim-ctl`,
-  a static Go binary that runs as PID 1. Nominatim itself is unchanged.
-- **Changed:** `.env` is regenerated in full on every start instead of being patched with `sed`.
-  Configuration changes now take effect on restart; previously the `__PLACEHOLDER__` tokens were
-  consumed on the first run and every later start silently ignored `POSTGRES_HOST`,
-  `NOMINATIM_PASSWORD`, `IMPORT_STYLE` and `REPLICATION_URL`.
-- **Changed:** Import completion is detected from the database (`public.placex`) rather than the
-  `import-finished` file, which lived in a different volume from the data it guarded.
-- **Fixed:** A database that cannot be inspected (connect or query error) no longer counts as
-  empty. Only a database that does not exist does; anything else stops the start instead of
-  running an import that drops it. The drop guard now refuses any database holding tables of its
-  own, not only one with `public.placex`. As a result an import interrupted part-way (for example
-  during osm2pgsql) is no longer dropped and retried on the next start; recover with
-  `docker compose run --rm nominatim-import reimport` or `ALLOW_DROP_EXISTING_DB=true`.
-- **Fixed:** Downloads resume only a partial file of the same URL and upstream version (recorded
-  in a `<file>.source` sidecar and sent as `If-Range`); anything else downloads from scratch. A
-  leftover dataset symlink is replaced instead of written through, a stalled body is abandoned
-  after 60 s without data and resumed, and `HTTPS_PROXY`/`HTTP_PROXY`/`NO_PROXY` are honoured.
-- **Security:** Child processes no longer inherit root's supplementary groups.
-- **Security:** `.env` is written to a fresh file and renamed into place, so a symlink planted in
-  the project directory is replaced rather than followed as root.
-- **Changed:** The compose files require `NOMINATIM_WEBUSER_PASSWORD`, so the read-only API role
-  no longer shares the application role's password. Without compose, a warning is logged.
-- **Fixed:** Continuous replication is supervised: if it exits, the container exits so the
-  restart policy brings it back, instead of serving data that silently goes stale. If
-  `REPLICATION_URL` is unreachable at start, the API still serves and replication starts once the
-  URL answers (checked every minute). Proxy variables now also reach the replication process.
-- **Fixed:** Varnish no longer caches 5xx responses.
-- **Fixed:** CI runs the serve-image and split-stack integration scenarios before publishing, and
-  publishing reuses the tested build's layer cache.
-- **Fixed:** An IPv6 `POSTGRES_HOST` works; `NOMINATIM_ROLE_OPTIONS=NOSUPERUSER` no longer turns
-  extension provisioning off; a role is created and marked in one transaction; an adopted import
-  gets the same freeze/replication, ANALYZE and cleanup as a fresh one; the import decision on
-  start is bounded to 30 s.
-- **Security:** The serve-only image writes the read-only web role's DSN into `.env`, not the
-  owning role's. Passwords embedded in `PBF_URL`, `REPLICATION_URL` or `DATA_MIRROR_URL` are masked
-  in the logs.
-- **Changed:** The compose files set `GUNICORN_WORKERS`, `NOMINATIM_API_POOL_SIZE` and `THREADS` to
-  fit their PostgreSQL `max_connections`, and replication passes `--threads` so the updater honours
-  `THREADS` too; the planet example downloads `planet-latest`.
-- **Fixed:** Varnish keys the cache on `Accept-Language` as well, so one client's language is no
-  longer served to everyone.
-- **Fixed:** CI no longer cancels a publish run half-way, lowercases image names, asserts that a
-  restart skips the import, and needs no undeclared `requests` package; `make requirements` installs
-  a hash-pinned `uv`.
-- **Fixed:** Images are published only when the static checks (`go vet`, unit tests, hadolint,
-  shellcheck) pass as well as the integration tests.
-- **Changed:** The image runs Gunicorn in the foreground; a crash now exits non-zero. A signalled
-  shutdown still exits 0.
-- **Changed:** Supplementary datasets are fetched over HTTPS from `nominatim.org` instead of `scp`.
-- **Changed:** The `nominatim` database role is created with `CREATEDB` instead of `SUPERUSER`;
-  PostGIS is installed into `template1` by the administrative connection.
-- **Changed:** The API connects as the read-only `www-data` role.
-- **Security:** Removed the hardcoded `NOMINATIM_PASSWORD` default, which became a PostgreSQL
-  superuser password. The variable is now required.
-- **Security:** Removed `sudo`, `sshpass` and `openssh-client`; all setuid/setgid bits are stripped
-  at build time, so `no-new-privileges:true` is now meaningful.
-- **Security:** Fixed SQL injection through `NOMINATIM_PASSWORD` and `POSTGRES_DB`.
-- **Security:** `DROP DATABASE` refuses to touch a populated database without `ALLOW_DROP_EXISTING_DB=true`.
-- **Security:** Pinned all Python dependencies with hashes (`gunicorn>=25.0` was resolving to 26.0.0)
-  and all GitHub Actions to commit SHAs; added a least-privilege `permissions:` block to CI.
+- **Breaking:** `NOMINATIM_PASSWORD` is required (the hardcoded default is gone) and
+  `POSTGRES_ADMIN_PASSWORD` is required for the initial import, never derived from it. The compose
+  files also require `NOMINATIM_WEBUSER_PASSWORD`; set all three in `contrib/.env`.
+- **Breaking:** Import completion is recorded in the database (`COMMENT ON DATABASE`, written only
+  after the import succeeds) instead of the `import-finished` file, so a populated database is
+  never dropped because a volume went missing. A database imported by an older release is
+  validated and adopted automatically. Import again with the `reimport` subcommand.
+- **Breaking:** An import interrupted part-way is no longer dropped and retried on the next start;
+  recover with `docker compose run --rm nominatim-import reimport` or `ALLOW_DROP_EXISTING_DB=true`.
+- **Breaking:** The `nominatim` role is created with `CREATEDB` instead of `SUPERUSER`, and missing
+  PostGIS/hstore extensions are installed into `template1` (`PROVISION_EXTENSIONS=false` opts out,
+  `NOMINATIM_ROLE_OPTIONS=SUPERUSER` restores the old role; a managed role loses `SUPERUSER` once it
+  is no longer listed). Roles the container did not create must be tagged
+  `managed by nominatim-docker` first; see the migration steps in REFACTOR.md.
+- **Breaking:** `sudo` is gone (use `docker exec -u nominatim ...`); `.env` is regenerated on every
+  start, so hand edits are lost; dataset paths must be absolute; `UPDATE_MODE` and the replication
+  intervals are validated at startup; a crashed Gunicorn exits non-zero. Volumes written by the
+  shell-era image are not repaired automatically: chown them once by hand.
+- **Added:** A `serve` build target, published as `serve` and `v<version>-<sha>-serve`: API only,
+  without osm2pgsql or postgresql-client, and it refuses to import.
+- **Added:** `nominatim-ctl import`, `reimport` and `replicate`. Every `contrib/docker-compose*.yml`
+  runs a one-shot `nominatim-import` (full image), the `nominatim` API (serve image, no admin
+  credentials) and `nominatim-updater` behind `--profile updates`, all with `read_only: true`.
 - **Added:** `POSTGRES_SSLMODE`, `DATA_MIRROR_URL`, `ALLOW_DROP_EXISTING_DB`, `NOMINATIM_WEBUSER`,
-  `GUNICORN_BIND`, `NOMINATIM_ROLE_OPTIONS`, `PROVISION_EXTENSIONS`, `*_SHA256` checksums, and
-  `_FILE` variants for both passwords.
-- **Added:** A `HEALTHCHECK` hitting `/status.php`, implemented in the entrypoint so the image needs no curl.
-- **Added:** `make check` / `make integration` and `test/integration.sh`, a local stack that imports
-  Monaco and asserts the API surface, privilege model, restart behaviour and shutdown semantics.
-- **Fixed:** Worker and thread counts respect the container CPU quota instead of reading host core count.
-- **Fixed:** `contrib/docker-compose-varnish.yml` was missing its top-level `networks:` block and
-  failed `docker compose config`.
-- **Removed:** `STORAGE_USER`, `STORAGE_HOST`, `STORAGE_PASSWORD`.
-
-Follow-up hardening (closes the remaining documented gaps):
-
-- **Security:** Role passwords are set with a client-computed SCRAM-SHA-256 verifier instead of
-  `ALTER ROLE ... PASSWORD '<cleartext>'`, which the server records verbatim under
-  `log_statement=ddl|all`. RFC 4013 SASLprep is applied first, so this covers non-ASCII passwords
-  too, with a fallback to the raw bytes that mirrors the server.
-- **Security:** Child process output (Gunicorn, osm2pgsql, Python tracebacks) is now filtered through
-  the secret masker as well, line by line. Previously only the entrypoint's own logging was redacted,
-  so a traceback could still print a DSN.
-- **Changed:** `template1` is modified only when an extension is genuinely missing, is skipped
-  entirely for a superuser role, and is logged when it happens. Nominatim's `createdb` fails on an
-  existing database, so `template1` remains the only route for an unprivileged role.
-- **Changed:** PyICU comes from Debian's prebuilt `python3-icu` via a `--system-site-packages` venv
-  rather than being compiled from an sdist. It has no wheel, so the arm64 publish leg was compiling
-  a C++ extension under QEMU. Every other dependency is a wheel, so the build stage no longer
-  installs a compiler at all.
-- **Docs:** Three previously undeclared behaviour changes are now in Breaking changes: a
-  non-integer replication interval is a startup error, the new Gunicorn defaults, and the
-  `template1` modification.
-- **Test:** An integration scenario imports with a non-ASCII password containing a soft hyphen and a
-  no-break space, proving the SASLprep path against a real PostgreSQL, and asserts the cleartext
-  does not reach the container log.
-
-Fixes from an independent review of the refactor itself:
-
-- **Fixed:** `cap_drop: ALL` in the `contrib/` compose files omitted `CAP_KILL`, so the entrypoint
-  (uid 0) could not signal the Gunicorn process it forked as uid 1000. Graceful shutdown silently
-  failed and the container was SIGKILLed at the stop timeout. The test stack now mirrors the shipped
-  capability set so this cannot regress unnoticed.
-- **Fixed:** The import/skip decision was made before the database was known to be reachable, so a
-  restart during a brief PostgreSQL blip took the import branch and exited non-zero.
-- **Fixed:** Import completion is now recorded as a `COMMENT ON DATABASE` written only after the
-  import succeeds. Keying off `public.placex` alone meant an interrupted import left the table behind
-  and was thereafter served as if it had finished. A database imported by an older release is
-  validated with `nominatim admin --check-database` and adopted automatically.
-- **Fixed:** Passwords containing a space were URL-encoded as `+` in the driver connection string and
-  never decoded back, so the role was created correctly and then failed every login.
-- **Fixed:** SIGTERM was only handled once Gunicorn was running; stopping the container during an
-  import exited 2. The handler is now installed before any long-running work.
-- **Fixed:** `.env` is chmod-ed on every write, so a `0644` file left on a volume by an older image is
-  corrected instead of kept.
-- **Fixed:** `NOMINATIM_*` and `PG*` variables passed to the container reach Nominatim again; the
-  first draft's allow-list silently dropped them, unlike the old `sudo -E`.
-- **Fixed:** `NOMINATIM_ROLE_OPTIONS` is now applied to an existing managed role, not only at creation.
-- **Fixed:** The HEALTHCHECK follows `GUNICORN_BIND` instead of hardcoding `127.0.0.1:8080`.
-- **Fixed:** `DEBUG_MODE` was parsed and never used; it now enables redacted verbose logging.
-- **Fixed:** `contrib/docker-compose-varnish.yml` pointed `POSTGRES_HOST` at a nonexistent service.
-- **Added:** `NOMINATIM_WEBUSER_PASSWORD`, so the read-only API role no longer shares the application
-  role's password. Reject `=` as well as `;` in passwords, since both are Nominatim DSN separators.
-
-Serve/import split and immutable root filesystem:
-
-- **Added:** A slim `serve` build target (`docker build --target serve`), published as the `serve`
-  and `v<version>-<sha>-serve` tags. It ships without osm2pgsql and postgresql-client, so the
-  long-running exposed container is smaller and has less attack surface. It serves an existing
-  import and refuses to run an import, failing fast with the remediation in the message; an explicit
-  `UPDATE_MODE` on it is a startup error rather than silently stale data.
-- **Changed:** Every shipped compose file now runs the container with `read_only: true`. Writes are
-  confined to `/nominatim` (volume), `/tmp` and `$HOME` (tmpfs), and `/dev/shm`. The entrypoint
-  takes ownership of `$HOME` at startup, because a tmpfs is mounted fresh, and root-owned, on
-  every boot.
-- **Test:** A `serve_image` integration scenario builds the serve target, asserts osm2pgsql and psql
-  are absent, asserts the fail-fast refusal against an empty database, and serves an existing import
-  under `--read-only`.
-
-Repository cleanup from an over-engineering audit:
-
-- **Removed:** `example.md`, which duplicated howto.md's configuration table, documented an invalid
-  `UPDATE_MODE=none`, and its example ran the upstream `mediagis/nominatim` image.
-- **Removed:** The upstream contributors table and `.all-contributorsrc`; every entry pointed at
-  `mediagis/nominatim-docker`. The credit is now a link to the upstream list.
-- **Changed:** The 16 CI scenarios share one `start-postgres` helper instead of carrying 16 copies
-  of the PostgreSQL bootstrap (−291 lines in ci.yml).
-- **Removed:** The pre-refactor volume migration path (`FIX_VOLUME_OWNERSHIP` and the ownership
-  pre-check). Volumes written by the shell-era image are no longer repaired automatically; chown
-  them once by hand if you still have one.
-- **Changed:** In-code comments rewritten to be short; the shell-era history they narrated lives in
-  docs/REFACTOR.md and git history.
-- **Docs:** Fixed stale claims left from before the refactor: `POSTGRES_ADMIN_PASSWORD` was
-  documented as defaulting to `NOMINATIM_PASSWORD` (it is required and never derived), the container
-  was said to expose PostgreSQL on 5432 (there is no PostgreSQL in this image), the project volume
-  was said to hold the import state (it lives in the database now), examples pinned a dead image
-  tag, and the never-implemented `API_DB_USER` variable is gone from the docs (`NOMINATIM_WEBUSER`
-  is the real one). The manual database setup in EXTERNAL-POSTGIS.md now includes the
-  `managed by nominatim-docker` role comments, without which the entrypoint refuses to reconcile
-  the roles it did not create.
-
-Import tuning, from analysing a real Italy import log:
-
-- **Fixed:** `max_wal_size` was 2GB in `postgresql.conf` and 3GB in `16g-postgresql.conf`, so an import
-  spent most of its time flushing: 134 of 135 checkpoints were WAL-triggered and PostgreSQL logged
-  "checkpoints are occurring too frequently" 35 times. Both profiles now use 8GB with a 30 minute
-  `checkpoint_timeout`. WAL sizing tracks write volume, not host RAM, so it is the same in both.
-- **Fixed:** `shm_size: 1gb` sat on the API container, which only writes Gunicorn heartbeat files to
-  `/dev/shm`, while PostgreSQL was left on the 64MB default it needs for parallel workers. Moved to
-  the database service in all four compose files.
-- **Fixed:** `RedactWriter` split child output on `\n` only, so osm2pgsql's `\r` progress stream was
-  withheld for the whole run and then dumped at once. It now splits on either terminator.
-- **Fixed:** `DROP DATABASE ... WITH (FORCE)` was never emitted: `SHOW server_version_num` returns
-  text, which pgx refuses to scan into an int, so the version check always failed silently and a
-  connection left by a previous container made every re-import fail with "is being accessed by
-  other users". The version is now read via `current_setting(...)::int`.
-- **Security:** `NOMINATIM_PASSWORD` and `NOMINATIM_WEBUSER_PASSWORD` were forwarded to every child
-  process because they match the `NOMINATIM_*` passthrough. Gunicorn, which connects as the
-  read-only web role, therefore still carried the `CREATEDB` role's password in its environment.
-- **Fixed:** `nominatim-ctl import` did not record the completion marker, so the next `serve` took
-  the slow validate-and-adopt path instead of skipping the import. The marker is now written by
-  the import itself.
-- **Fixed:** `make vet`/`test`/`tidy`/`fmt` failed on a fresh host with `permission denied`: the Go
-  cache volumes were created root-owned while the toolchain runs as the invoking user.
-- **Changed:** A rejected database password now fails immediately with "PostgreSQL rejected the
-  credentials" instead of retrying for the full five-minute connection budget.
-- **Changed:** The entrypoint binary is copied as the last layer of the `serve` and `full` stages, so
-  a Go-only change rebuilds in seconds instead of re-running the apt layers.
-- **Changed:** `test/docker-compose.test.yml` and the CI `start-postgres` helper pin `postgis/postgis`
-  by digest like the `contrib/` stacks already did.
-- **Changed:** Built with Go 1.27.1, pinned by digest. Since Go 1.25 the runtime derives `GOMAXPROCS`
-  from the cgroup CPU quota, so the hand-rolled `/sys/fs/cgroup/cpu.max` parser is gone. `THREADS`
-  and `GUNICORN_WORKERS` still default to the container's CPU allowance; cgroup v1 is now honoured
-  too, and a quota below two CPUs yields 2 rather than 1.
-- **Changed:** Base image bumped to `debian:13.6-slim` and every `postgis/postgis:18-3.6-alpine` pin
-  refreshed to the digest the tag currently resolves to; both pinned by index digest.
-- **Changed:** CI actions bumped to their latest releases (checkout v7.0.1, build-push-action v7.3.0,
-  login-action v4.6.0, setup-buildx-action v4.3.0), still pinned by commit; the static-analysis job
-  runs `make vet test fmt-check` in the pinned Go image instead of `actions/setup-go`; the shellcheck
-  and hadolint images are pinned by version and digest.
-- **Security:** The build no longer runs `pip install --upgrade pip setuptools wheel`, which fetched
-  unpinned packages from PyPI; Debian's pip installs the hash-checked requirements and is then
-  removed from the image. Dropped `libgl1` from the purge list (no longer installed).
-- **Added:** `nominatim-ctl replicate` runs replication in the foreground, so updates can run in their
-  own container on the full image while the API runs on the serve image.
-- **Changed:** `nominatim-ctl import` skips a completed import (the same decision `serve` makes)
-  instead of refusing, so a one-shot import service can be re-run on every `compose up`.
-- **Added:** `nominatim-ctl reimport` drops the database and imports again: the explicit one-shot
-  form of a forced re-import, so no persistent environment switch can drop a database on a routine
-  `compose up`.
-- **Changed:** Every `contrib/docker-compose*.yml` runs three containers: a one-shot `nominatim-import`
-  (full image), the `nominatim` API on the serve image with no import tooling and no admin
-  credentials, and `nominatim-updater` behind `--profile updates`. The local file drops its fixed
-  container and network names so the integration suite can run it next to a developer's copy.
-  Covered by integration scenario `split`.
-- **Changed:** A container that holds `POSTGRES_ADMIN_PASSWORD` reconciles the role passwords when it
-  finds its completed import, so a rotated `NOMINATIM_PASSWORD` takes effect without a re-import.
-- **Changed:** An `import` interrupted by a stop exits non-zero, so it can never satisfy a
-  `service_completed_successfully` dependency with a partial database.
-- **Changed:** `contrib/docker-compose-varnish.yml` sets `IMPORT_WIKIPEDIA: "true"` and `THREADS: 4`.
-  `THREADS` defaults to the logical CPU count, which oversubscribes an SMT host.
+  `NOMINATIM_WEBUSER_PASSWORD`, `GUNICORN_BIND`, `GUNICORN_TIMEOUT`, `GUNICORN_GRACEFUL_TIMEOUT`,
+  `NOMINATIM_ROLE_OPTIONS`, `PROVISION_EXTENSIONS`, `*_SHA256` checksums and `_FILE` variants for
+  the passwords; all listed in [howto.md](howto.md#general-parameters).
+- **Added:** A `HEALTHCHECK` on `/status.php`, implemented in the entrypoint (no curl in the image).
+- **Added:** `make check`, `make integration` and `test/integration.sh`, a local stack that imports
+  Monaco and asserts the API surface, privilege model, restart and shutdown behaviour.
+- **Changed:** `config.sh`, `init.sh` and `start.sh` are replaced by `nominatim-ctl`, a static Go
+  binary running as PID 1. Nominatim itself is unchanged. Configuration changes now take effect on
+  restart; previously `POSTGRES_HOST`, `NOMINATIM_PASSWORD`, `IMPORT_STYLE` and `REPLICATION_URL`
+  were ignored after the first run.
+- **Changed:** The API connects as the read-only `www-data` role. A container holding
+  `POSTGRES_ADMIN_PASSWORD` reconciles the role passwords, so a rotated password needs no re-import.
+- **Changed:** Supplementary datasets come over HTTPS from `nominatim.org` instead of `scp`.
+  Downloads resume only a matching partial file, abandon a stalled body, and honour
+  `HTTPS_PROXY`/`HTTP_PROXY`/`NO_PROXY`.
+- **Changed:** Gunicorn runs in the foreground with `--timeout 60`, `--graceful-timeout 30`,
+  `--max-requests 10000` with jitter and `--keep-alive 5`; `GUNICORN_GRACEFUL_TIMEOUT` also bounds
+  how long the entrypoint waits before killing it. Continuous replication is supervised: if it
+  exits, so does the container. An unreachable `REPLICATION_URL` no longer disables replication;
+  it starts once the URL answers. `REPLICATION_URL` takes precedence over `FREEZE` everywhere; a database that is already frozen
+  is served without replication (with a warning), and
+  `replicate` needs no access to the `postgres` maintenance database.
+- **Changed:** `THREADS` and `GUNICORN_WORKERS` default to the container's CPU allowance (cgroup
+  quota, at least 2). The compose files size them to PostgreSQL's `max_connections`, and replication
+  honours `THREADS`.
+- **Changed:** Base image `debian:13.7-slim`, entrypoint built with Go 1.27.1 (refreshed image
+  digest), `postgis/postgis:18-3.6-alpine` pins refreshed; all pinned by digest. PyICU comes from
+  Debian's `python3-icu`, so the build installs no compiler.
+- **Changed:** pgx v5.11.0 (security fixes; passwords containing `@` and other reserved characters
+  are now encoded so libpq-style parsing reads them correctly) and golang.org/x/text v0.42.0;
+  golang.org/x/crypto is no longer a dependency.
+- **Changed:** Python dependencies refreshed, still hash-pinned: gunicorn 26.2.0, urllib3 2.8.0,
+  psycopg 3.3.6 and minor bumps.
+- **Changed:** The Varnish example runs `varnish:9.0.4` (Debian image); 8.0 is EOL and affected by
+  VSV00020. It also sets `IMPORT_WIKIPEDIA: "true"` and `THREADS: 4`; the planet example downloads
+  `planet-latest`.
+- **Changed:** CI publishes only after the static checks, unit tests and integration scenarios
+  pass, runs `govulncheck` on a schedule, and pins every action by commit SHA with a least-privilege
+  `permissions:` block. The CI matrix and the docs were simplified.
+- **Security:** Removed `sudo`, `sshpass` and `openssh-client`; setuid/setgid bits are stripped, so
+  `no-new-privileges:true` is meaningful. Child processes drop root's supplementary groups and no
+  longer inherit the database passwords.
+- **Security:** Fixed SQL injection through `NOMINATIM_PASSWORD` and `POSTGRES_DB`. Role passwords
+  are set with a client-computed SCRAM-SHA-256 verifier (SASLprep applied), so the cleartext never
+  reaches the server log. Pre-existing roles without the managed tag are left alone.
+- **Security:** `DROP DATABASE` refuses a database holding tables of its own unless
+  `ALLOW_DROP_EXISTING_DB=true`, and a database that cannot be inspected never counts as empty.
+- **Security:** Secrets are masked in the entrypoint's logs and in child output, including passwords
+  embedded in `PBF_URL`, `REPLICATION_URL` or `DATA_MIRROR_URL`. `.env` is written `0600` to a fresh
+  file and renamed into place; the serve image's holds only the read-only role's DSN.
+- **Security:** Python dependencies are hash-pinned and the build no longer runs an unpinned
+  `pip install --upgrade`.
+- **Fixed:** Varnish no longer caches 5xx responses and keys the cache on `Accept-Language`.
+- **Fixed:** `contrib/docker-compose-varnish.yml` lacked its top-level `networks:` block and pointed
+  `POSTGRES_HOST` at a nonexistent service.
+- **Fixed:** `max_wal_size` raised to 8GB with a 30 minute `checkpoint_timeout` in both PostgreSQL
+  profiles (imports were dominated by WAL-triggered checkpoints), and `shm_size: 1gb` moved from the
+  API container to the database service in all four compose files.
+- **Removed:** `STORAGE_USER`, `STORAGE_HOST`, `STORAGE_PASSWORD`; `example.md`; the upstream
+  contributors table and `.all-contributorsrc` (now a link to the upstream list);
+  `docs/VARNISH-PURGE.md`, which described purge features the shipped VCL does not have (purging is
+  now covered in `contrib/README-varnish.md`).
 
 ### v5.3.2 (2026-04-22)
 
