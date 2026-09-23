@@ -165,8 +165,10 @@ reachable), with an optional per-dataset `*_SHA256`. `sshpass` and
 `openssh-client` are gone, along with the committed storage credentials, which
 are in public git history and should be considered permanently burned.
 
-**C4: unguarded `DROP DATABASE`.** Now refuses to drop a database containing
-`public.placex` unless `ALLOW_DROP_EXISTING_DB=true`.
+**C4: unguarded `DROP DATABASE`.** Now refuses to drop a database holding any
+tables of its own (extension-owned ones such as `spatial_ref_sys` aside) unless
+`ALLOW_DROP_EXISTING_DB=true`. A database that cannot be inspected is never
+treated as empty; only one that does not exist is.
 
 **C5: SQL injection via `NOMINATIM_PASSWORD` and `POSTGRES_DB`.** A password
 containing `'` broke the statement; a crafted one executed as superuser. An

@@ -46,7 +46,11 @@ The Nominatim container will automatically:
 4. Run the Nominatim import process
 
 ### Manual Setup (Optional)
-If you prefer to set up the database manually, you can create the required users and database:
+If you prefer to set up the database manually, you can create the required users and database.
+The import still needs `POSTGRES_ADMIN_PASSWORD` and connects as the `postgres` superuser (the
+name is fixed): it reconciles the role passwords, then drops and recreates `POSTGRES_DB` before
+importing, provided that database holds no tables of its own. A database created by hand is
+therefore replaced, so the `CREATE DATABASE` step below is optional.
 
 ```sql
 -- Connect as postgres superuser.
@@ -60,6 +64,7 @@ CREATE USER "www-data";
 -- PROVISION_EXTENSIONS=false.
 \c template1
 CREATE EXTENSION IF NOT EXISTS postgis;
+CREATE EXTENSION IF NOT EXISTS postgis_raster;
 CREATE EXTENSION IF NOT EXISTS hstore;
 
 -- Set passwords (replace with your actual password)
@@ -123,7 +128,7 @@ If the Nominatim container cannot connect to PostgreSQL:
 ### Permission Issues
 If you encounter permission errors:
 
-1. Ensure the `nominatim` role has `CREATEDB`, and that PostGIS and hstore are installed in `template1`
+1. Ensure the `nominatim` role has `CREATEDB`, and that PostGIS, postgis_raster and hstore are installed in `template1`
    (or set `PROVISION_EXTENSIONS=false` and install them yourself). Set `NOMINATIM_ROLE_OPTIONS=SUPERUSER`
    only if your provider cannot pre-install extensions.
 2. Verify that the database exists and is accessible

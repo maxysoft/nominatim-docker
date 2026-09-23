@@ -112,7 +112,7 @@ if (bereq.url ~ "^/search" || bereq.url ~ "^/search\.php") {
 To change the amount of memory allocated to Varnish, edit `docker-compose-varnish.yml`:
 
 ```yaml
-varnish:
+nominatim-varnish:
   environment:
     VARNISH_SIZE: 2G  # Increase from 1G to 2G
 ```
@@ -122,7 +122,7 @@ varnish:
 To expose Varnish on a different port, edit the ports section:
 
 ```yaml
-varnish:
+nominatim-varnish:
   ports:
     - "8080:80"  # Expose on port 8080 instead of 80
 ```

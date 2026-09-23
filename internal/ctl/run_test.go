@@ -25,13 +25,13 @@ func TestServeOnlyImageGuards(t *testing.T) {
 	}
 
 	c2 := &Config{ReplicationURL: "https://example.invalid/updates", UpdateMode: "continuous"}
-	if _, err := startReplication(context.Background(), c2, &Runner{}); err == nil || !strings.Contains(err.Error(), "osm2pgsql") {
+	if _, _, err := startReplication(context.Background(), c2, &Runner{}); err == nil || !strings.Contains(err.Error(), "osm2pgsql") {
 		t.Fatalf("startReplication = %v, want osm2pgsql refusal", err)
 	}
 
 	c3 := &Config{ReplicationURL: "https://example.invalid/updates"}
-	if cmd, err := startReplication(context.Background(), c3, &Runner{}); err != nil || cmd != nil {
-		t.Fatalf("startReplication = (%v, %v), want clean skip", cmd, err)
+	if stop, _, err := startReplication(context.Background(), c3, &Runner{}); err != nil || stop != nil {
+		t.Fatalf("startReplication = (stop set: %v, %v), want clean skip", stop != nil, err)
 	}
 }
 

@@ -5,7 +5,7 @@
 #
 # Usage: test/integration.sh [scenario ...]
 # Scenarios: full security restart volume_loss serve_image shutdown failfast
-#            unicode_password split
+#            unicode_password split drop_guard
 
 set -euo pipefail
 
@@ -19,7 +19,7 @@ BASE_URL="http://127.0.0.1:${ITEST_PORT}"
 # The shipped local stack, under its own project so it cannot collide with a developer's copy.
 SPLIT="docker compose -f contrib/docker-compose-local.yml -p nominatim-itest-split --profile updates"
 # Exported once so the EXIT trap can interpolate the compose file too.
-export NOMINATIM_PORT=$((ITEST_PORT + 2)) NOMINATIM_PASSWORD=itest-nominatim-password POSTGRES_ADMIN_PASSWORD=itest-admin-password
+export NOMINATIM_PORT=$((ITEST_PORT + 2)) NOMINATIM_PASSWORD=itest-nominatim-password NOMINATIM_WEBUSER_PASSWORD=itest-web-password POSTGRES_ADMIN_PASSWORD=itest-admin-password
 IMAGE="nominatim-itest:local"
 
 pass=0
@@ -41,7 +41,7 @@ trap cleanup EXIT
 wait_for_api() {
   local deadline=$((SECONDS + ${1:-900}))
   while ((SECONDS < deadline)); do
-    if ! $COMPOSE ps --status running --services 2>/dev/null | grep -q '^nominatim$'; then
+    if ! service_running main nominatim; then
       log "nominatim container is no longer running"
       $COMPOSE logs --tail 60 nominatim
       return 1
@@ -71,6 +71,17 @@ logs_contain() {
     split) out=$($SPLIT logs "$2" 2>/dev/null) ;;
   esac
   grep -q -- "$3" <<<"$out"
+}
+
+# service_running main|split SERVICE. Captures first, for the same pipefail
+# reason as logs_contain.
+service_running() {
+  local out
+  case $1 in
+    main) out=$($COMPOSE ps --status running --services 2>/dev/null || true) ;;
+    split) out=$($SPLIT ps --status running --services 2>/dev/null || true) ;;
+  esac
+  grep -qx -- "$2" <<<"$out"
 }
 
 # assert_json_nonempty URL DESCRIPTION
@@ -272,9 +283,15 @@ scenario_volume_loss() {
 }
 
 # The slim --target serve image must serve an existing import, but refuse to
-# create one. Runs while the stack from earlier scenarios is up and imported.
+# create one. Reuses the imported stack from earlier scenarios, or starts it.
 scenario_serve_image() {
   log "scenario: serve-only image"
+  if ! service_running main nominatim; then
+    log "starting the import stack this scenario runs against"
+    cleanup
+    $COMPOSE up -d
+    wait_for_api 1200 || { bad "API never became ready"; return; }
+  fi
 
   log "building $IMAGE-serve"
   DOCKER_BUILDKIT=1 docker build --target serve -t "$IMAGE-serve" .
@@ -428,6 +445,42 @@ scenario_unicode_password() {
   else
     ok "password absent from the container log"
   fi
+  # Its stack uses a password later scenarios do not pass; never reuse it.
+  cleanup
+}
+
+# A database holding tables of its own must be refused, never dropped or
+# imported over, when it carries no completion marker.
+scenario_drop_guard() {
+  log "scenario: drop guard"
+  cleanup
+  $COMPOSE up -d postgres >/dev/null 2>&1
+  # Over TCP: the image's temporary init server listens on the socket only,
+  # so this reaches the final server, not one about to restart.
+  pg() { $COMPOSE exec -T postgres psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 -qtA "$@"; }
+  for _ in $(seq 60); do pg -c 'SELECT 1' >/dev/null 2>&1 && break; sleep 2; done
+  pg -c 'SELECT 1' >/dev/null 2>&1 || { bad "postgres never became ready for drop_guard"; return; }
+  pg -c "CREATE DATABASE guarded" >/dev/null
+  pg -d guarded -c "CREATE TABLE precious (id int); INSERT INTO precious VALUES (1)" >/dev/null
+
+  local out rc
+  set +e
+  out=$(timeout 300 docker run --rm --network nominatim-itest_default \
+        -e POSTGRES_HOST=postgres -e POSTGRES_DB=guarded -e POSTGRES_SSLMODE=disable \
+        -e NOMINATIM_PASSWORD=itest-nominatim-password -e POSTGRES_ADMIN_PASSWORD=itest-admin-password \
+        -e PBF_URL=https://example.invalid/a.pbf "$IMAGE" serve 2>&1)
+  rc=$?
+  set -e
+  if [[ $rc -ne 0 && $rc -ne 124 ]] && grep -q 'holds tables but no completion marker' <<<"$out"; then
+    ok "database with tables of its own is refused"
+  else
+    bad "drop guard did not refuse (rc=$rc): ${out:0:300}"
+  fi
+  if [[ "$(pg -d guarded -c 'SELECT count(*) FROM precious' 2>/dev/null)" == 1 ]]; then
+    ok "its data survived"
+  else
+    bad "its data is gone"
+  fi
 }
 
 # One-shot import on the full image, serve-only API without admin credentials,
@@ -503,7 +556,7 @@ scenario_split() {
     if logs_contain split nominatim-updater 'starting replication'; then started=1; break; fi
     sleep 2
   done
-  if [[ $started -eq 1 ]] && $SPLIT ps --status running --services 2>/dev/null | grep -q '^nominatim-updater$'; then
+  if [[ $started -eq 1 ]] && service_running split nominatim-updater; then
     ok "updater initialised replication and is running"
   else
     bad "updater did not start replication"
@@ -516,7 +569,7 @@ scenario_split() {
 main() {
   local scenarios=("$@")
   if [[ ${#scenarios[@]} -eq 0 ]]; then
-    scenarios=(full security restart volume_loss serve_image shutdown failfast unicode_password split)
+    scenarios=(full security restart volume_loss serve_image shutdown failfast unicode_password split drop_guard)
   fi
 
   build_image

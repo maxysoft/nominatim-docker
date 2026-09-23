@@ -19,6 +19,45 @@ Full rationale, parity matrix and migration steps: [docs/REFACTOR.md](docs/REFAC
   `NOMINATIM_PASSWORD`, `IMPORT_STYLE` and `REPLICATION_URL`.
 - **Changed:** Import completion is detected from the database (`public.placex`) rather than the
   `import-finished` file, which lived in a different volume from the data it guarded.
+- **Fixed:** A database that cannot be inspected (connect or query error) no longer counts as
+  empty. Only a database that does not exist does; anything else stops the start instead of
+  running an import that drops it. The drop guard now refuses any database holding tables of its
+  own, not only one with `public.placex`. As a result an import interrupted part-way (for example
+  during osm2pgsql) is no longer dropped and retried on the next start; recover with
+  `docker compose run --rm nominatim-import reimport` or `ALLOW_DROP_EXISTING_DB=true`.
+- **Fixed:** Downloads resume only a partial file of the same URL and upstream version (recorded
+  in a `<file>.source` sidecar and sent as `If-Range`); anything else downloads from scratch. A
+  leftover dataset symlink is replaced instead of written through, a stalled body is abandoned
+  after 60 s without data and resumed, and `HTTPS_PROXY`/`HTTP_PROXY`/`NO_PROXY` are honoured.
+- **Security:** Child processes no longer inherit root's supplementary groups.
+- **Security:** `.env` is written to a fresh file and renamed into place, so a symlink planted in
+  the project directory is replaced rather than followed as root.
+- **Changed:** The compose files require `NOMINATIM_WEBUSER_PASSWORD`, so the read-only API role
+  no longer shares the application role's password. Without compose, a warning is logged.
+- **Fixed:** Continuous replication is supervised: if it exits, the container exits so the
+  restart policy brings it back, instead of serving data that silently goes stale. If
+  `REPLICATION_URL` is unreachable at start, the API still serves and replication starts once the
+  URL answers (checked every minute). Proxy variables now also reach the replication process.
+- **Fixed:** Varnish no longer caches 5xx responses.
+- **Fixed:** CI runs the serve-image and split-stack integration scenarios before publishing, and
+  publishing reuses the tested build's layer cache.
+- **Fixed:** An IPv6 `POSTGRES_HOST` works; `NOMINATIM_ROLE_OPTIONS=NOSUPERUSER` no longer turns
+  extension provisioning off; a role is created and marked in one transaction; an adopted import
+  gets the same freeze/replication, ANALYZE and cleanup as a fresh one; the import decision on
+  start is bounded to 30 s.
+- **Security:** The serve-only image writes the read-only web role's DSN into `.env`, not the
+  owning role's. Passwords embedded in `PBF_URL`, `REPLICATION_URL` or `DATA_MIRROR_URL` are masked
+  in the logs.
+- **Changed:** The compose files set `GUNICORN_WORKERS`, `NOMINATIM_API_POOL_SIZE` and `THREADS` to
+  fit their PostgreSQL `max_connections`, and replication passes `--threads` so the updater honours
+  `THREADS` too; the planet example downloads `planet-latest`.
+- **Fixed:** Varnish keys the cache on `Accept-Language` as well, so one client's language is no
+  longer served to everyone.
+- **Fixed:** CI no longer cancels a publish run half-way, lowercases image names, asserts that a
+  restart skips the import, and needs no undeclared `requests` package; `make requirements` installs
+  a hash-pinned `uv`.
+- **Fixed:** Images are published only when the static checks (`go vet`, unit tests, hadolint,
+  shellcheck) pass as well as the integration tests.
 - **Changed:** The image runs Gunicorn in the foreground; a crash now exits non-zero. A signalled
   shutdown still exits 0.
 - **Changed:** Supplementary datasets are fetched over HTTPS from `nominatim.org` instead of `scp`.

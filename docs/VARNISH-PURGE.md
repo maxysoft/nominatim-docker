@@ -30,7 +30,7 @@ Recommendation: Use `varnishadm ban` (or `varnishadm` called from a management s
 
 - From a shell that has access to `varnishadm` inside the running varnish container:
 
-  docker exec -it varnish varnishadm "ban req.url ~ ^/search"
+  docker exec -it nominatim-varnish varnishadm "ban req.url ~ ^/search"
 
 - Or, using remote management (host machine) pointing to the management interface, and using the secret file if required:
 
@@ -42,13 +42,13 @@ Notes:
 
 3. Purge a specific, fully-canonicalized URL
 
-- If your canonical VCL produces `"/search?q=a&limit=10"` (sorted), you can ban that exact URL:
+- The shipped VCL sorts query parameters (`std.querysort`), so ban the sorted form, for example `/search?limit=10&q=a`:
 
-  varnishadm -T 127.0.0.1:6082 -S /etc/varnish/secret "ban req.url == /search?q=a&limit=10"
+  varnishadm -T 127.0.0.1:6082 -S /etc/varnish/secret "ban req.url == /search?limit=10&q=a"
 
 - Or match exact URL with regex:
 
-  varnishadm -T 127.0.0.1:6082 -S /etc/varnish/secret "ban req.url ~ '^/search\\?q=a&limit=10$'"
+  varnishadm -T 127.0.0.1:6082 -S /etc/varnish/secret "ban req.url ~ '^/search\\?limit=10&q=a$'"
 
 Caveat:
 - `==` checks equality and is strict. Regex `~` is more flexible (remember to escape special chars).
@@ -87,7 +87,7 @@ Useful commands:
 
 - Run `varnishadm` inside the container (easy & safe if you have access to the container):
 
-  docker exec -it varnish varnishadm "ban req.url ~ '^/search'"
+  docker exec -it nominatim-varnish varnishadm "ban req.url ~ '^/search'"
 
 - Connect to management port from host (if exposed in compose): (example uses secret at `/etc/varnish/secret` inside container)
 
@@ -130,15 +130,15 @@ Important: do not expose the management port publicly.
 
 - Ban all search requests:
 
-  docker exec -it varnish varnishadm "ban req.url ~ '^/search'"
+  docker exec -it nominatim-varnish varnishadm "ban req.url ~ '^/search'"
 
 - Ban an exact canonical URL:
 
-  docker exec -it varnish varnishadm "ban req.url == /search?q=london&limit=10"
+  docker exec -it nominatim-varnish varnishadm "ban req.url == /search?limit=10&q=london"
 
 - Check ban list:
 
-  docker exec -it varnish varnishadm "ban.list"
+  docker exec -it nominatim-varnish varnishadm "ban.list"
 
 - Verify X-Cache header after ban:
 

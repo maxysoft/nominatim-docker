@@ -12,6 +12,7 @@ func TestBaseEnvWithholdsRolePasswords(t *testing.T) {
 	t.Setenv("NOMINATIM_WEBUSER_PASSWORD", "web-pw")
 	t.Setenv("NOMINATIM_DATABASE_DSN", "pgsql:from-operator")
 	t.Setenv("NOMINATIM_QUERY_TIMEOUT", "5")
+	t.Setenv("HTTPS_PROXY", "http://proxy:3128")
 	c, err := Load()
 	if err != nil {
 		t.Fatalf("Load: %v", err)
@@ -22,7 +23,7 @@ func TestBaseEnvWithholdsRolePasswords(t *testing.T) {
 			t.Errorf("child environment carries %s:\n%s", k, env)
 		}
 	}
-	if !strings.Contains(env, "NOMINATIM_QUERY_TIMEOUT=5") || !strings.Contains(env, "NOMINATIM_DATABASE_DSN=pgsql:host=db;") {
+	if !strings.Contains(env, "NOMINATIM_QUERY_TIMEOUT=5") || !strings.Contains(env, "HTTPS_PROXY=http://proxy:3128") || !strings.Contains(env, "NOMINATIM_DATABASE_DSN=pgsql:host=db;") {
 		t.Errorf("expected passthrough and the generated DSN:\n%s", env)
 	}
 }

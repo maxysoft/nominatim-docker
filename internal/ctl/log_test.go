@@ -89,3 +89,18 @@ func TestRedactWriterFlushesPartialLine(t *testing.T) {
 		t.Fatalf("Flush produced %q", sink.String())
 	}
 }
+
+// Mirror credentials in a URL would otherwise appear in every download log line.
+func TestRegisterURLSecrets(t *testing.T) {
+	RegisterURLSecrets(&Config{PBFURL: "https://user:mirror-secret-42@mirror.example/planet.pbf"})
+	if got := Redact("downloading https://user:mirror-secret-42@mirror.example/planet.pbf"); strings.Contains(got, "mirror-secret-42") {
+		t.Fatalf("password not masked: %s", got)
+	}
+	// Percent-encoded as the operator wrote it, and decoded.
+	RegisterURLSecrets(&Config{ReplicationURL: "https://u:p%40ss-secret-77@mirror.example/updates/"})
+	for _, form := range []string{"p%40ss-secret-77", "p@ss-secret-77"} {
+		if got := Redact("x " + form + " y"); strings.Contains(got, form) {
+			t.Fatalf("%s not masked: %s", form, got)
+		}
+	}
+}

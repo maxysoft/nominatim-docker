@@ -44,6 +44,7 @@ func run() error {
 	ctl.RegisterSecret(c.NominatimPassword)
 	ctl.RegisterSecret(c.AdminPassword)
 	ctl.RegisterSecret(c.WebUserPassword)
+	ctl.RegisterURLSecrets(c)
 
 	// Installed before any long-running work, so a stop during a multi-day
 	// import still exits cleanly instead of dying with exit 2.

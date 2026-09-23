@@ -78,9 +78,15 @@ func RunImport(ctx context.Context, c *Config, r *Runner) error {
 	if err := warmCaches(ctx, c, r); err != nil {
 		return err
 	}
+	return finishImport(ctx, c, c.LibpqURL("nominatim", c.NominatimPassword, c.PostgresDB))
+}
 
+// finishImport gathers planner statistics, records completion and removes the
+// downloads; shared by a fresh import and an adopted one. COMMENT ON DATABASE
+// needs ownership, so the caller chooses which role url connects as.
+func finishImport(ctx context.Context, c *Config, url string) error {
 	Logf("gathering planner statistics")
-	conn, err := pgx.Connect(ctx, c.LibpqURL("nominatim", c.NominatimPassword, c.PostgresDB))
+	conn, err := pgx.Connect(ctx, url)
 	if err != nil {
 		return err
 	}
@@ -88,7 +94,8 @@ func RunImport(ctx context.Context, c *Config, r *Runner) error {
 	if _, err := conn.Exec(ctx, "ANALYZE"); err != nil {
 		return err
 	}
-	// Recorded only after full success, so an interrupted run is retried.
+	// Recorded only after full success. An interrupted run leaves tables but
+	// no marker, so the next start refuses until reimport or ALLOW_DROP_EXISTING_DB.
 	if err := markImportComplete(ctx, conn, c.PostgresDB); err != nil {
 		return err
 	}
@@ -137,10 +144,15 @@ func provisionDatabase(ctx context.Context, c *Config) error {
 	// not block here without a diagnostic.
 	probeCtx, cancelProbe := context.WithTimeout(ctx, 15*time.Second)
 	defer cancelProbe()
-	var hasData bool
-	if tc, err := pgx.Connect(probeCtx, c.LibpqURL(adminUser, c.AdminPassword, c.PostgresDB)); err == nil {
-		hasData = hasNominatimData(probeCtx, tc)
-		tc.Close(probeCtx)
+	hasData, err := databaseHasTables(probeCtx, c.LibpqURL(adminUser, c.AdminPassword, c.PostgresDB))
+	if err != nil {
+		if !c.AllowDropExistingDB {
+			return fmt.Errorf("cannot inspect database %q, refusing to drop it: %w", c.PostgresDB, err)
+		}
+		// The drop is allowed either way, and this is the only way out for a
+		// database left invalid by an interrupted DROP (PostgreSQL 16+).
+		Logf("cannot inspect database %q (%s); treating it as populated", c.PostgresDB, Redact(err.Error()))
+		hasData = true
 	}
 
 	if err := reconcileRoles(ctx, c, adminURL); err != nil {
@@ -158,7 +170,7 @@ func provisionDatabase(ctx context.Context, c *Config) error {
 	}
 
 	// A superuser role installs its own extensions; nothing to pre-seed then.
-	if c.ProvisionExtensions && !strings.Contains(strings.ToUpper(c.RoleOptions), "SUPERUSER") {
+	if c.ProvisionExtensions && !roleIsSuperuser(c.RoleOptions) {
 		tmpl, err := pgx.Connect(ctx, c.LibpqURL(adminUser, c.AdminPassword, "template1"))
 		if err != nil {
 			return err
@@ -175,18 +187,28 @@ func provisionDatabase(ctx context.Context, c *Config) error {
 	return nil
 }
 
-// configureReplicationOrFreeze runs the post-import replication/freeze branch.
-func configureReplicationOrFreeze(ctx context.Context, c *Config, r *Runner, dl *Downloader) error {
-	if c.ReplicationURL != "" && !dl.Reachable(ctx, c.ReplicationURL, 3, 2*time.Second) {
-		Logf("WARNING: REPLICATION_URL unreachable; continuing without replication")
-		c.ReplicationURL = ""
-		if err := WriteEnvFile(c, r.UID, r.GID); err != nil {
-			return err
+// roleIsSuperuser reports whether NOMINATIM_ROLE_OPTIONS grants SUPERUSER. A
+// substring test would also match NOSUPERUSER.
+func roleIsSuperuser(options string) bool {
+	for _, opt := range strings.Fields(options) {
+		if strings.EqualFold(opt, "SUPERUSER") {
+			return true
 		}
 	}
+	return false
+}
+
+// configureReplicationOrFreeze runs the post-import replication/freeze branch.
+func configureReplicationOrFreeze(ctx context.Context, c *Config, r *Runner, dl *Downloader) error {
 	if c.ReplicationURL != "" {
 		if c.Freeze {
 			Logf("skipping freeze because REPLICATION_URL is set")
+		}
+		// A passing outage must not turn replication off for good: serve and
+		// the updater run --init again on every start.
+		if !dl.Reachable(ctx, c.ReplicationURL, 3, 2*time.Second) {
+			Logf("WARNING: REPLICATION_URL unreachable; skipping replication --init for now")
+			return nil
 		}
 		return r.Run(ctx, "nominatim", "replication", "--init", "--project-dir", c.ProjectDir)
 	}
@@ -213,9 +235,11 @@ func cleanupDownloads(c *Config) {
 	Logf("removing downloaded dumps in %s", c.ProjectDir)
 	for _, d := range Datasets {
 		_ = os.Remove(filepath.Join(c.ProjectDir, d.Local))
+		_ = os.Remove(statePath(filepath.Join(c.ProjectDir, d.Local)))
 	}
 	if c.PBFURL != "" {
 		_ = os.Remove(c.OSMFile())
+		_ = os.Remove(statePath(c.OSMFile()))
 	}
 }
 

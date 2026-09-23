@@ -56,7 +56,7 @@ requirements: ## Regenerate requirements.txt with pinned versions and hashes
 		apt-get -qq update && \
 		apt-get -qq install -y --no-install-recommends \
 			python3 python3-pip ca-certificates >/dev/null && \
-		pip install --quiet --break-system-packages uv && \
+		pip install --quiet --break-system-packages --require-hashes --only-binary :all: -r requirements-tools.txt && \
 		uv pip compile --generate-hashes --no-header --no-emit-package pyicu \
 			--output-file requirements.txt requirements.in && \
 		chown $(UID):$(GID) requirements.txt'

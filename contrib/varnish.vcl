@@ -53,7 +53,29 @@ sub vcl_recv {
     }
 }
 
+sub vcl_hash {
+    # Nominatim localises names by Accept-Language, so it is part of the key,
+    # normalised to lower case without whitespace. The built-in vcl_hash then
+    # adds the URL and host.
+    if (req.http.Accept-Language) {
+        hash_data(std.tolower(regsuball(req.http.Accept-Language, "\s+", "")));
+    }
+}
+
 sub vcl_backend_response {
+    # Never cache a server error: one failed query would otherwise be served
+    # for up to 24 hours after the backend recovers. A failed background
+    # refresh keeps the stale object; otherwise a short hit-for-miss stops
+    # concurrent requests from queueing behind the failing one.
+    if (beresp.status >= 500) {
+        if (bereq.is_bgfetch) {
+            return (abandon);
+        }
+        set beresp.ttl = 10s;
+        set beresp.uncacheable = true;
+        return (deliver);
+    }
+
     # Set cache TTL based on the request URL
     if (bereq.url ~ "^/search" || bereq.url ~ "^/search\.php") {
         set beresp.ttl = 1h;

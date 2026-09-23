@@ -26,6 +26,39 @@ func TestIsAuthError(t *testing.T) {
 	}
 }
 
+// Only a database proven missing may be read as empty; anything else reaching
+// the import path could end in DROP DATABASE on a finished import.
+func TestIsMissingDatabase(t *testing.T) {
+	if !isMissingDatabase(fmt.Errorf("connect: %w", &pgconn.PgError{Code: "3D000"})) {
+		t.Fatal("wrapped invalid_catalog_name not recognised")
+	}
+	for _, err := range []error{
+		nil,
+		&pgconn.PgError{Code: "53300"}, // too_many_connections
+		&pgconn.PgError{Code: "28000"}, // pg_hba rejects this database
+		errors.New("dial tcp: i/o timeout"),
+	} {
+		if isMissingDatabase(err) {
+			t.Fatalf("%v must not count as a missing database", err)
+		}
+	}
+}
+
+// NOSUPERUSER contains SUPERUSER; it must not switch provisioning off.
+func TestRoleIsSuperuser(t *testing.T) {
+	for opts, want := range map[string]bool{
+		"":                     false,
+		"CREATEDB":             false,
+		"NOSUPERUSER CREATEDB": false,
+		"SUPERUSER":            true,
+		"createdb superuser":   true,
+	} {
+		if got := roleIsSuperuser(opts); got != want {
+			t.Errorf("roleIsSuperuser(%q) = %v, want %v", opts, got, want)
+		}
+	}
+}
+
 // A password reaching ALTER ROLE unescaped was arbitrary SQL execution as the
 // PostgreSQL superuser.
 func TestQuoteLiteral(t *testing.T) {

@@ -10,7 +10,9 @@ permissions:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Only pull requests: cancelling a push run could stop publish between
+  # its registry pushes and leave the tags inconsistent.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   static:
@@ -53,16 +55,21 @@ jobs:
           context: .
           tags: nominatim:${{ steps.get_version.outputs.NOMINATIM_VERSION }}
           outputs: type=docker,dest=/tmp/nominatim.tar
+          # Read back by publish, so the amd64 layers it pushes are the ones tested.
+          cache-from: type=gha,scope=full
+          cache-to: type=gha,scope=full,mode=max
 
       # The slim serve target must at least keep building; its behaviour
       # (refusing imports, serving an existing database read-only) is asserted
-      # by test/integration.sh scenario serve_image.
+      # by the integration job (test/integration.sh serve_image).
       - name: Build serve target
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
           target: serve
           tags: nominatim:${{ steps.get_version.outputs.NOMINATIM_VERSION }}-serve
+          cache-from: type=gha,scope=serve
+          cache-to: type=gha,scope=serve,mode=max
 
       - name: Upload artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -184,6 +191,9 @@ jobs:
                 nominatim:$NOMINATIM_VERSION &
 
               ./assert-non-empty-json "http://localhost:8004/search.php?q=avenue%20pasteur"
+              # The second start must reuse the import, not run it again.
+              docker logs nominatim > /tmp/restart.log 2>&1
+              grep -q "existing Nominatim import found" /tmp/restart.log || { echo "FAIL: restart did not skip the import"; exit 1; }
               docker exec -i -u nominatim nominatim nominatim replication --project-dir /nominatim --once
               ./assert-non-empty-json "http://localhost:8004/search.php?q=avenue%20pasteur"
               
@@ -640,9 +650,22 @@ jobs:
         working-directory: .github/workflows
         run: ${{ matrix.test_scenario.commands }}
   
+  # The serve image and the shipped split compose stack are covered only
+  # here; the script builds both targets itself.
+  integration:
+    name: Integration scenarios
+    needs: build
+    if: ${{ needs.build.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Serve image and split stack
+        run: test/integration.sh serve_image split drop_guard
+
   publish:
     name: Publish docker image
-    needs: test
+    needs: [static, test, integration]
     runs-on: ubuntu-latest
     # master publishes the real tags; the test branch publishes the same
     # images with a -test suffix for pre-merge validation.
@@ -661,6 +684,11 @@ jobs:
       - name: Get commit short reference
         id: get_commit
         run: echo "SHORT_SHA=${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
+
+      # OCI references must be lowercase; the repository name may not be.
+      - name: Lowercase repository
+        id: repo
+        run: echo "REPO=${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
 
       - name: Compute tag suffix
         id: get_suffix
@@ -698,6 +726,9 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Each push reads the build job's cache: on a hit, the amd64 image
+      # pushed is layer for layer the one the tests ran. arm64 is built here
+      # and is not tested.
       - name: Build and push to Docker Hub
         if: ${{ github.repository_owner == 'maxysoft' }}
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
@@ -707,9 +738,10 @@ jobs:
           push: true
           provenance: mode=max
           sbom: true
+          cache-from: type=gha,scope=full
           tags: |
-            ${{ github.repository }}:v${{ steps.get_version.outputs.NOMINATIM_VERSION }}-${{ steps.get_commit.outputs.SHORT_SHA }}${{ steps.get_suffix.outputs.TAG_SUFFIX }}
-            ${{ github.repository }}:latest${{ steps.get_suffix.outputs.TAG_SUFFIX }}
+            ${{ steps.repo.outputs.REPO }}:v${{ steps.get_version.outputs.NOMINATIM_VERSION }}-${{ steps.get_commit.outputs.SHORT_SHA }}${{ steps.get_suffix.outputs.TAG_SUFFIX }}
+            ${{ steps.repo.outputs.REPO }}:latest${{ steps.get_suffix.outputs.TAG_SUFFIX }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
@@ -726,9 +758,10 @@ jobs:
           push: true
           provenance: mode=max
           sbom: true
+          cache-from: type=gha,scope=serve
           tags: |
-            ${{ github.repository }}:v${{ steps.get_version.outputs.NOMINATIM_VERSION }}-${{ steps.get_commit.outputs.SHORT_SHA }}-serve${{ steps.get_suffix.outputs.TAG_SUFFIX }}
-            ${{ github.repository }}:serve${{ steps.get_suffix.outputs.TAG_SUFFIX }}
+            ${{ steps.repo.outputs.REPO }}:v${{ steps.get_version.outputs.NOMINATIM_VERSION }}-${{ steps.get_commit.outputs.SHORT_SHA }}-serve${{ steps.get_suffix.outputs.TAG_SUFFIX }}
+            ${{ steps.repo.outputs.REPO }}:serve${{ steps.get_suffix.outputs.TAG_SUFFIX }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
@@ -743,9 +776,10 @@ jobs:
           push: true
           provenance: mode=max
           sbom: true
+          cache-from: type=gha,scope=full
           tags: |
-            ghcr.io/${{ github.repository }}:v${{ steps.get_version.outputs.NOMINATIM_VERSION }}-${{ steps.get_commit.outputs.SHORT_SHA }}${{ steps.get_suffix.outputs.TAG_SUFFIX }}
-            ghcr.io/${{ github.repository }}:latest${{ steps.get_suffix.outputs.TAG_SUFFIX }}
+            ghcr.io/${{ steps.repo.outputs.REPO }}:v${{ steps.get_version.outputs.NOMINATIM_VERSION }}-${{ steps.get_commit.outputs.SHORT_SHA }}${{ steps.get_suffix.outputs.TAG_SUFFIX }}
+            ghcr.io/${{ steps.repo.outputs.REPO }}:latest${{ steps.get_suffix.outputs.TAG_SUFFIX }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
@@ -761,9 +795,10 @@ jobs:
           push: true
           provenance: mode=max
           sbom: true
+          cache-from: type=gha,scope=serve
           tags: |
-            ghcr.io/${{ github.repository }}:v${{ steps.get_version.outputs.NOMINATIM_VERSION }}-${{ steps.get_commit.outputs.SHORT_SHA }}-serve${{ steps.get_suffix.outputs.TAG_SUFFIX }}
-            ghcr.io/${{ github.repository }}:serve${{ steps.get_suffix.outputs.TAG_SUFFIX }}
+            ghcr.io/${{ steps.repo.outputs.REPO }}:v${{ steps.get_version.outputs.NOMINATIM_VERSION }}-${{ steps.get_commit.outputs.SHORT_SHA }}-serve${{ steps.get_suffix.outputs.TAG_SUFFIX }}
+            ghcr.io/${{ steps.repo.outputs.REPO }}:serve${{ steps.get_suffix.outputs.TAG_SUFFIX }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}

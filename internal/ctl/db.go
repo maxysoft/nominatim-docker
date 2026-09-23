@@ -64,6 +64,42 @@ func isAuthError(err error) bool {
 	return errors.As(err, &pgErr) && strings.HasPrefix(pgErr.Code, "28")
 }
 
+// isMissingDatabase reports SQLSTATE 3D000 (invalid_catalog_name): the
+// database does not exist. It is the only connect error that proves a
+// database holds nothing; every other one leaves its contents unknown.
+func isMissingDatabase(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "3D000"
+}
+
+// databaseHasTables connects to url and reports whether its database holds
+// any tables. A database that does not exist holds none. Any other failure is
+// returned, never read as "empty": that reading once let a transient error end
+// in DROP DATABASE on a finished import.
+func databaseHasTables(ctx context.Context, url string) (bool, error) {
+	conn, err := pgx.Connect(ctx, url)
+	if isMissingDatabase(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	defer conn.Close(ctx)
+	return hasUserTables(ctx, conn)
+}
+
+// readImportMarker connects to url and reports whether dbname carries the
+// completion marker. The marker lives in pg_database, so a connection to the
+// maintenance database works even where pg_hba keeps the admin out of dbname.
+func readImportMarker(ctx context.Context, url, dbname string) (bool, error) {
+	conn, err := pgx.Connect(ctx, url)
+	if err != nil {
+		return false, err
+	}
+	defer conn.Close(ctx)
+	return importComplete(ctx, conn, dbname)
+}
+
 // ensureRole creates role if it is absent, and reconciles its password and
 // attributes. A role without our marker comment belongs to someone else, so
 // we stop rather than reset its password.
@@ -89,11 +125,21 @@ func ensureRole(ctx context.Context, conn *pgx.Conn, role, password string, extr
 		if extraOptions != "" {
 			stmt += " " + extraOptions
 		}
-		if _, err := conn.Exec(ctx, stmt); err != nil {
+		// One transaction: a role created without its marker would be refused
+		// as foreign on every later start.
+		tx, err := conn.Begin(ctx)
+		if err != nil {
 			return fmt.Errorf("creating role %q: %w", role, err)
 		}
-		if _, err := conn.Exec(ctx, fmt.Sprintf("COMMENT ON ROLE %s IS %s", ident, QuoteLiteral(roleMarker))); err != nil {
+		defer tx.Rollback(ctx) // no-op after Commit
+		if _, err := tx.Exec(ctx, stmt); err != nil {
+			return fmt.Errorf("creating role %q: %w", role, err)
+		}
+		if _, err := tx.Exec(ctx, fmt.Sprintf("COMMENT ON ROLE %s IS %s", ident, QuoteLiteral(roleMarker))); err != nil {
 			return fmt.Errorf("marking role %q: %w", role, err)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return fmt.Errorf("creating role %q: %w", role, err)
 		}
 		return nil
 	}
@@ -136,14 +182,26 @@ func reconcileRoles(ctx context.Context, c *Config, url string) error {
 	return ensureRole(ctx, conn, c.WebUser, c.WebUserPassword, "")
 }
 
-// hasNominatimData reports whether the connected database holds imported
-// tables; see importMarker for why this alone is not a completion signal.
-func hasNominatimData(ctx context.Context, conn *pgx.Conn) bool {
+// userTablesSQL finds any relation that is not a system catalog and not owned
+// by an extension (PostGIS's spatial_ref_sys comes from template1). Checking
+// only public.placex would let a non-Nominatim database on a shared server be
+// dropped without ALLOW_DROP_EXISTING_DB.
+const userTablesSQL = `SELECT EXISTS (
+	SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+	WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f')
+	  AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+	  AND n.nspname NOT LIKE 'pg\_toast%' AND n.nspname NOT LIKE 'pg\_temp%'
+	  AND NOT EXISTS (SELECT 1 FROM pg_depend d
+	                  WHERE d.classid = 'pg_class'::regclass AND d.objid = c.oid AND d.deptype = 'e'))`
+
+// hasUserTables reports whether the connected database holds any data of its
+// own; see importMarker for why this alone is not a completion signal.
+func hasUserTables(ctx context.Context, conn *pgx.Conn) (bool, error) {
 	var present bool
-	if err := conn.QueryRow(ctx, "SELECT to_regclass('public.placex') IS NOT NULL").Scan(&present); err != nil {
-		return false
+	if err := conn.QueryRow(ctx, userTablesSQL).Scan(&present); err != nil {
+		return false, fmt.Errorf("checking for existing tables: %w", err)
 	}
-	return present
+	return present, nil
 }
 
 // dropDatabase removes dbname, refusing to touch a populated database unless
@@ -153,7 +211,7 @@ func dropDatabase(ctx context.Context, conn *pgx.Conn, dbname string, hasData, a
 		return err
 	}
 	if hasData && !allowed {
-		return fmt.Errorf("database %q already contains an imported Nominatim schema (public.placex exists). "+
+		return fmt.Errorf("database %q already contains tables. "+
 			"Refusing to drop it. Set ALLOW_DROP_EXISTING_DB=true to overwrite, or point POSTGRES_DB at a different database", dbname)
 	}
 	if hasData {
@@ -216,14 +274,18 @@ func provisionExtensions(ctx context.Context, conn *pgx.Conn) error {
 
 // importComplete reports whether a finished import is recorded. Reads
 // pg_database, so any connection to the server will do.
-func importComplete(ctx context.Context, conn *pgx.Conn, dbname string) bool {
+func importComplete(ctx context.Context, conn *pgx.Conn, dbname string) (bool, error) {
 	var comment *string
-	if err := conn.QueryRow(ctx,
+	err := conn.QueryRow(ctx,
 		"SELECT shobj_description(oid, 'pg_database') FROM pg_database WHERE datname = $1",
-		dbname).Scan(&comment); err != nil {
-		return false
+		dbname).Scan(&comment)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
 	}
-	return comment != nil && *comment == importMarker
+	if err != nil {
+		return false, fmt.Errorf("reading the import marker of %q: %w", dbname, err)
+	}
+	return comment != nil && *comment == importMarker, nil
 }
 
 // markImportComplete records that the import finished. Requires ownership of

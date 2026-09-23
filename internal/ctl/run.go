@@ -39,13 +39,15 @@ func (r *Runner) Command(ctx context.Context, name string, args ...string) *exec
 	// WaitDelay escalates to SIGKILL.
 	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
 	cmd.WaitDelay = shutdownGrace
-	// Only meaningful, and only permitted, when running as root.
+	// Only meaningful, and only permitted, when running as root. The empty
+	// Groups list makes Go call setgroups, so the child does not keep root's
+	// supplementary groups (gid 0, compose group_add).
 	if os.Geteuid() == 0 && r.UID != 0 {
 		cmd.SysProcAttr = &syscall.SysProcAttr{
 			Credential: &syscall.Credential{
-				Uid:         uint32(r.UID),
-				Gid:         uint32(r.GID),
-				NoSetGroups: true,
+				Uid:    uint32(r.UID),
+				Gid:    uint32(r.GID),
+				Groups: []uint32{},
 			},
 		}
 	}

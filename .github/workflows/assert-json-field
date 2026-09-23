@@ -14,16 +14,11 @@
 #
 # Retries with exponential backoff to handle slow container startup.
 
-import logging
-import requests
-import sys
 import json
 import re
+import sys
 
-from requests.adapters import HTTPAdapter
-from requests.packages.urllib3.util.retry import Retry
-
-logging.basicConfig(level=logging.WARNING)
+from ci_http import get_json
 
 if len(sys.argv) != 4:
     print(f"Usage: {sys.argv[0]} URL field.path expected_pattern")
@@ -31,17 +26,7 @@ if len(sys.argv) != 4:
 
 url, field_path, pattern = sys.argv[1], sys.argv[2], sys.argv[3]
 
-s = requests.Session()
-retries = Retry(total=7, backoff_factor=2, status_forcelist=[502, 503, 504])
-s.mount('http://', HTTPAdapter(max_retries=retries))
-
-resp = s.get(url)
-
-if resp.status_code != 200:
-    print(f'Endpoint returned status code {resp.status_code}: {resp.content}')
-    sys.exit(1)
-
-jsn = resp.json()
+jsn = get_json(url, attempts=8)
 
 # If response is an array, use the first element
 obj = jsn[0] if isinstance(jsn, list) else jsn

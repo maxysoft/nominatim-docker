@@ -5,30 +5,14 @@
 #
 # It retries the HTTP request a number of times.
 
-import logging
-import requests
-import sys
 import json
+import sys
 
-from requests.adapters import HTTPAdapter
-from requests.packages.urllib3.util.retry import Retry
+from ci_http import get_json
 
-logging.basicConfig(level=logging.WARNING)
-
-s = requests.Session()
-retries = Retry(total=18, backoff_factor=2, status_forcelist=[ 502, 503, 504 ])
-s.mount('http://', HTTPAdapter(max_retries=retries))
-
-resp = s.get(sys.argv[1])
-
-if(resp.status_code != 200):
-    print(f'Endpoint returned status code {resp.status_code}: {resp.content}')
-    sys.exit(1)
-
-else:
-    jsn = resp.json()
-    print(f"JSON response returned by {sys.argv[1]}:")
-    print(json.dumps(jsn, indent = 2))
-    assert len(jsn) > 0
-    print("✅ JSON was non-empty array")
+jsn = get_json(sys.argv[1], attempts=19)
+print(f"JSON response returned by {sys.argv[1]}:")
+print(json.dumps(jsn, indent=2))
+assert len(jsn) > 0
+print("✅ JSON was non-empty array")
 

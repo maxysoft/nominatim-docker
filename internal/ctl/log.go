@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -94,4 +95,35 @@ func (r *RedactWriter) Flush() {
 		io.WriteString(r.W, Redact(string(r.buf)))
 		r.buf = r.buf[:0]
 	}
+}
+
+// RegisterURLSecrets masks passwords embedded in the configured URLs
+// (https://user:pass@mirror/...), which are logged on every download.
+func RegisterURLSecrets(c *Config) {
+	for _, raw := range []string{c.PBFURL, c.ReplicationURL, c.MirrorBaseURL} {
+		if u, err := url.Parse(raw); err == nil && u.User != nil {
+			if p, ok := u.User.Password(); ok {
+				RegisterSecret(p)
+			}
+		}
+		// Logged as written, so the percent-encoded form must be masked too.
+		RegisterSecret(rawURLPassword(raw))
+	}
+}
+
+// rawURLPassword returns the password of raw's userinfo exactly as written.
+func rawURLPassword(raw string) string {
+	_, rest, ok := strings.Cut(raw, "://")
+	if !ok {
+		return ""
+	}
+	if i := strings.IndexAny(rest, "/?#"); i >= 0 {
+		rest = rest[:i]
+	}
+	at := strings.LastIndex(rest, "@")
+	if at < 0 {
+		return ""
+	}
+	_, pw, _ := strings.Cut(rest[:at], ":")
+	return pw
 }

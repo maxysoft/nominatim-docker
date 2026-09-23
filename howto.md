@@ -69,17 +69,15 @@ Other places at Geofabrik follow the pattern `https://download.geofabrik.de/$CON
 - `IMPORT_GB_POSTCODES`: Whether to download and import the GB postcode dump (`true`) or path to GB postcode dump in the container. (default: `false`)
 - `IMPORT_TIGER_ADDRESSES`: Whether to download and import the Tiger address data (`true`) or path to a preprocessed Tiger address set in the container. (default: `false`)
 - `THREADS`: How many threads should be used to import (default: the container's CPU allowance, which is the cgroup CPU quota when one is set and all cores otherwise)
-- `GUNICORN_WORKERS`: Specifies how many Gunicorn worker processes should handle API requests. If not explicitly set, it defaults to the container's CPU allowance (same rule as `THREADS`). Increase this value to improve concurrent request handling capacity, but ensure it aligns with your server's CPU resources.
-- `NOMINATIM_PASSWORD`: Password for the `nominatim` and `www-data` database roles. **Required. There is no default.**
-  Use `NOMINATIM_PASSWORD_FILE` to read it from a secret file instead. Must not contain `;`.
+- `GUNICORN_WORKERS`: Specifies how many Gunicorn worker processes should handle API requests. If not explicitly set, it defaults to the container's CPU allowance (same rule as `THREADS`). Increase this value to improve concurrent request handling capacity, but ensure it aligns with your server's CPU resources. Each worker holds up to `NOMINATIM_API_POOL_SIZE` database connections (5 by default), so keep `GUNICORN_WORKERS` × 5 plus `THREADS` below PostgreSQL's `max_connections`.
+- `NOMINATIM_PASSWORD`: Password for the `nominatim` application role, which owns the database. **Required. There is no default.**
+  Use `NOMINATIM_PASSWORD_FILE` to read it from a secret file instead. Must not contain `;` or `=`.
+- `NOMINATIM_WEBUSER_PASSWORD`: Password for the read-only `www-data` role the API connects as. Falls back to
+  `NOMINATIM_PASSWORD` with a warning; the shipped compose files require it. Same rules, and a `_FILE` variant.
 - `POSTGRES_ADMIN_PASSWORD`: Password for the PostgreSQL superuser. **Required for the initial import**,
   used only to create roles and install PostGIS. Also supports a `_FILE` variant.
 - `WARMUP_ON_STARTUP`: Whether to warm up the database caches on container startup by loading tables and indices into RAM. This can improve initial query performance, especially on systems with slow disks and sufficient RAM. However, it will increase the container's startup time. Set to `true` to enable. (default: `false`)
 - `DEBUG_MODE`: Enable verbose debug output showing all executed commands during startup and import. Useful for troubleshooting but creates noisy logs. Set to `true` to enable. (default: `false`)
-
-The following run parameters are available for configuration:
-
-- `shm-size`: Size of the tmpfs in Docker, for bigger imports (e.g. Europe) this needs to be set to at least 1GB or more. Half the size of your available RAM is recommended. (default: `64M`)
 
 ### External Database Configuration
 
@@ -117,6 +115,9 @@ In addition you can also mount a volume / bind-mount on `/nominatim/flatnode` (s
 
 ```sh
 docker run -it \
+  -e POSTGRES_HOST=your_postgres_host \
+  -e NOMINATIM_PASSWORD=very_secure_password \
+  -e POSTGRES_ADMIN_PASSWORD=your_postgres_password \
   -v nominatim-flatnode:/nominatim/flatnode \
   -e PBF_URL=https://download.geofabrik.de/europe/monaco-latest.osm.pbf \
   -e REPLICATION_URL=https://download.geofabrik.de/europe/monaco-updates/ \
@@ -135,7 +136,7 @@ When using external PostgreSQL (recommended), data persistence is handled by you
 So if you want to be able to kill your container and start it up again with all the data still present use the following command with external PostgreSQL:
 
 ```sh
-docker run -it --shm-size=1g \
+docker run -it \
   -e PBF_URL=https://download.geofabrik.de/europe/monaco-latest.osm.pbf \
   -e REPLICATION_URL=https://download.geofabrik.de/europe/monaco-updates/ \
   -e IMPORT_WIKIPEDIA=false \
@@ -163,6 +164,9 @@ A sample of `PBF_PATH` variable usage is:
 
 ```sh
 docker run -it \
+  -e POSTGRES_HOST=your_postgres_host \
+  -e NOMINATIM_PASSWORD=very_secure_password \
+  -e POSTGRES_ADMIN_PASSWORD=your_postgres_password \
   -e PBF_PATH=/nominatim/data/monaco-latest.osm.pbf \
   -e REPLICATION_URL=https://download.geofabrik.de/europe/monaco-updates/ \
   -p 8080:8080 \
@@ -197,6 +201,9 @@ If you want your Nominatim container to host multiple areas from Geofabrik, you 
 
 ```sh
 docker run -it \
+  -e POSTGRES_HOST=your_postgres_host \
+  -e NOMINATIM_PASSWORD=very_secure_password \
+  -e POSTGRES_ADMIN_PASSWORD=your_postgres_password \
   -e PBF_PATH=/nominatim/data/merged.osm.pbf \
   -p 8080:8080 \
   -v /osm-maps/data:/nominatim/data \
@@ -212,6 +219,9 @@ Including the Wikipedia importance dumps, postcode files, and Tiger address data
 
 ```sh
 docker run -it \
+  -e POSTGRES_HOST=your_postgres_host \
+  -e NOMINATIM_PASSWORD=very_secure_password \
+  -e POSTGRES_ADMIN_PASSWORD=your_postgres_password \
   -e PBF_URL=https://download.geofabrik.de/europe/monaco-latest.osm.pbf \
   -e IMPORT_WIKIPEDIA=/nominatim/extras/wikimedia-importance.csv.gz \
   -p 8080:8080 \
@@ -232,6 +242,9 @@ image and run the container with
 ```sh
 docker build -t nominatim . && \
 docker run -it \
+    -e POSTGRES_HOST=your_postgres_host \
+    -e NOMINATIM_PASSWORD=very_secure_password \
+    -e POSTGRES_ADMIN_PASSWORD=your_postgres_password \
     -e PBF_URL=https://download.geofabrik.de/europe/monaco-latest.osm.pbf \
     -e REPLICATION_URL=https://download.geofabrik.de/europe/monaco-updates/ \
     -p 8080:8080 \

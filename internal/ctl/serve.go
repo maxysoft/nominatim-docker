@@ -6,12 +6,9 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"os/exec"
 	"strings"
-	"syscall"
 	"time"
 
-	"github.com/jackc/pgx/v5"
 )
 
 // nominatimHome matches the account created in the Dockerfile.
@@ -37,6 +34,12 @@ func BaseEnv(c *Config) []string {
 		// child (Gunicorn connects as the web role).
 		switch k {
 		case "NOMINATIM_DATABASE_DSN", "NOMINATIM_PASSWORD", "NOMINATIM_WEBUSER_PASSWORD":
+			continue
+		// The same network the downloader uses: pyosmium fetches the diffs.
+		// ALL_PROXY is left out: Go ignores it, and the two must agree.
+		case "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
+			"http_proxy", "https_proxy", "no_proxy":
+			env = append(env, kv)
 			continue
 		}
 		if strings.HasPrefix(k, "NOMINATIM_") || strings.HasPrefix(k, "PG") {
@@ -105,7 +108,7 @@ func Serve(ctx context.Context, c *Config) error {
 		return err
 	}
 
-	replication, err := startReplication(ctx, c, r)
+	replication, replicationDone, err := startReplication(ctx, c, r)
 	if err != nil {
 		return err
 	}
@@ -124,7 +127,7 @@ func Serve(ctx context.Context, c *Config) error {
 		Logf("Skipping cache warmup")
 	}
 
-	return runGunicorn(ctx, c, r, replication)
+	return runGunicorn(ctx, c, r, replication, replicationDone)
 }
 
 // EnsureImported decides whether an import is required, and runs one if so.
@@ -162,35 +165,48 @@ func EnsureImported(ctx context.Context, c *Config, r *Runner) error {
 		targetURL = c.LibpqURL(adminUser, c.AdminPassword, c.PostgresDB)
 	}
 
-	// A database we cannot open holds no import (the server itself is
-	// reachable), but the reason is logged because the fallback is the import.
-	var complete, hasData bool
-	if conn, err := pgx.Connect(ctx, targetURL); err == nil {
-		complete = importComplete(ctx, conn, c.PostgresDB)
-		hasData = hasNominatimData(ctx, conn)
-		conn.Close(ctx)
-	} else {
-		Logf("cannot inspect database %q (%s); assuming it holds no import", c.PostgresDB, Redact(err.Error()))
+	// Over the probe connection, already known to work: the marker lives in
+	// pg_database, so this holds where pg_hba keeps the admin out of POSTGRES_DB.
+	// Bounded: a server that accepts TCP but stalls must end in an error,
+	// not a hang, and an error here never leads to a drop.
+	ictx, cancelInspect := context.WithTimeout(ctx, 30*time.Second)
+	defer cancelInspect()
+	complete, err := readImportMarker(ictx, probeURL, c.PostgresDB)
+	if err != nil {
+		return fmt.Errorf("cannot read the import marker of %q: %w", c.PostgresDB, err)
 	}
-
 	if complete {
 		Logf("existing Nominatim import found in %q, skipping import", c.PostgresDB)
 		return settled()
 	}
 
+	// The fallback is an import that drops the database, so only a database
+	// proven missing or empty may reach it; any other error stops here.
+	hasData, err := databaseHasTables(ictx, targetURL)
+	if err != nil {
+		return fmt.Errorf("cannot inspect database %q, refusing to import over it: %w", c.PostgresDB, err)
+	}
+
 	if hasData && !c.AllowDropExistingDB {
-		// Tables without a completion marker: an import that died part-way, or
-		// a database imported elsewhere. Nominatim's validator decides which.
-		Logf("database %q holds Nominatim tables but no completion marker; validating", c.PostgresDB)
+		// Tables without a completion marker: an import that died part-way, a
+		// database imported elsewhere, or not Nominatim at all. Nominatim's
+		// validator decides which.
+		Logf("database %q holds tables but no completion marker; validating", c.PostgresDB)
 		if err := r.Run(ctx, "nominatim", "admin", "--check-database", "--project-dir", c.ProjectDir); err != nil {
 			return fmt.Errorf("database %q contains an incomplete or invalid Nominatim schema: %w\n"+
 				"Set ALLOW_DROP_EXISTING_DB=true to discard it and import again", c.PostgresDB, err)
 		}
 		Logf("validation passed; adopting the existing import")
-		// The adopted database was not created here, so COMMENT ON DATABASE
-		// may need the admin connection.
-		if err := recordImport(ctx, targetURL, c.PostgresDB); err != nil {
-			return err
+		// The steps a fresh import runs after its own check. The adopted
+		// database was not created here, so these may lack ownership; the
+		// import is valid either way, so a failure is a warning, not an outage.
+		if err := configureReplicationOrFreeze(ctx, c, r, NewDownloader(c.UserAgent)); err != nil {
+			Logf("WARNING: adopted import: %v (the nominatim role may not own its tables)", Redact(err.Error()))
+		}
+		if err := finishImport(ctx, c, targetURL); err != nil {
+			Logf("WARNING: adopted import not stamped: %v. It is served and validated again on the next start; "+
+				"to stamp it, run as its owner: COMMENT ON DATABASE %s IS %s",
+				Redact(err.Error()), QuoteIdentifier(c.PostgresDB), QuoteLiteral(importMarker))
 		}
 		return settled()
 	}
@@ -199,61 +215,89 @@ func EnsureImported(ctx context.Context, c *Config, r *Runner) error {
 	return RunImport(ctx, c, r)
 }
 
-// recordImport stamps the completion marker; COMMENT ON DATABASE needs
-// ownership, so the caller chooses which role connects.
-func recordImport(ctx context.Context, url, dbname string) error {
-	conn, err := pgx.Connect(ctx, url)
-	if err != nil {
-		return err
-	}
-	defer conn.Close(ctx)
-	return markImportComplete(ctx, conn, dbname)
-}
+// replicationRetry is how often serve re-checks an unreachable REPLICATION_URL.
+const replicationRetry = time.Minute
 
-// startReplication launches the background diff process, if configured.
-func startReplication(ctx context.Context, c *Config, r *Runner) (*exec.Cmd, error) {
+// startReplication launches the background diff process, if configured. The
+// channel receives its exit status; stop terminates it.
+func startReplication(ctx context.Context, c *Config, r *Runner) (stop func(), done <-chan error, err error) {
 	if c.ReplicationURL == "" || c.Freeze {
 		Logf("skipping replication")
-		return nil, nil
+		return nil, nil, nil
 	}
 	// nominatim replication shells out to osm2pgsql for every diff, which the
 	// serve-only image does not ship. An explicit UPDATE_MODE is a promise
 	// this image cannot keep, so it fails rather than serving stale data.
 	if !HaveImportTools() {
 		if c.UpdateMode != "" {
-			return nil, fmt.Errorf("UPDATE_MODE=%q needs osm2pgsql, which the serve-only image does not ship; run replication from the full image", c.UpdateMode)
+			return nil, nil, fmt.Errorf("UPDATE_MODE=%q needs osm2pgsql, which the serve-only image does not ship; run replication from the full image", c.UpdateMode)
 		}
 		Logf("serve-only image: skipping replication (no osm2pgsql)")
-		return nil, nil
+		return nil, nil, nil
 	}
 	dl := NewDownloader(c.UserAgent)
-	if !dl.Reachable(ctx, c.ReplicationURL, 3, 2*time.Second) {
-		Logf("WARNING: REPLICATION_URL unreachable; skipping replication")
-		return nil, nil
-	}
 	// Re-init on every start in case the replication settings changed; this
 	// also keeps the state usable for a manual `nominatim replication --once`.
-	if err := r.Run(ctx, "nominatim", "replication", "--init", "--project-dir", c.ProjectDir); err != nil {
-		return nil, err
-	}
 	if c.UpdateMode == "" {
+		if !dl.Reachable(ctx, c.ReplicationURL, 3, 2*time.Second) {
+			Logf("WARNING: REPLICATION_URL unreachable; skipping replication")
+			return nil, nil, nil
+		}
+		if err := r.Run(ctx, "nominatim", "replication", "--init", "--project-dir", c.ProjectDir); err != nil {
+			return nil, nil, err
+		}
 		Logf("no UPDATE_MODE set; not starting a background replication process")
-		return nil, nil
+		return nil, nil, nil
 	}
 
-	Logf("starting replication (%s)", c.UpdateMode)
-	cmd := r.Command(ctx, "nominatim", replicationArgs(c)...)
-	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("starting replication: %w", err)
+	rctx, cancel := context.WithCancel(ctx)
+	ch := make(chan error, 1)
+	launch := func() error {
+		if err := r.Run(rctx, "nominatim", "replication", "--init", "--project-dir", c.ProjectDir); err != nil {
+			return err
+		}
+		Logf("starting replication (%s)", c.UpdateMode)
+		cmd := r.Command(rctx, "nominatim", replicationArgs(c)...)
+		if err := cmd.Start(); err != nil {
+			return fmt.Errorf("starting replication: %w", err)
+		}
+		// Reaped here, and the status handed to runGunicorn, which supervises it.
+		go func() { ch <- cmd.Wait() }()
+		return nil
 	}
-	// Reaped here: with UPDATE_MODE=once nothing else would ever wait on it.
-	go func() { _ = cmd.Wait() }()
-	return cmd, nil
+	if dl.Reachable(rctx, c.ReplicationURL, 3, 2*time.Second) {
+		if err := launch(); err != nil {
+			cancel()
+			return nil, nil, err
+		}
+		return cancel, ch, nil
+	}
+	// Serving beats freshness: an upstream outage must not take the API down.
+	// Replication starts, and is supervised, once the URL answers again.
+	Logf("WARNING: REPLICATION_URL unreachable; serving without replication and retrying every %v", replicationRetry)
+	go func() {
+		for {
+			select {
+			case <-rctx.Done():
+				ch <- rctx.Err() // lets runGunicorn's shutdown wait finish
+				return
+			case <-time.After(replicationRetry):
+			}
+			if dl.Reachable(rctx, c.ReplicationURL, 1, 0) {
+				if err := launch(); err != nil {
+					ch <- err
+				}
+				return
+			}
+		}
+	}()
+	return cancel, ch, nil
 }
 
 // replicationArgs builds the `nominatim replication` invocation for UpdateMode.
 func replicationArgs(c *Config) []string {
-	args := []string{"replication", "--project-dir", c.ProjectDir}
+	// --threads bounds the indexing connections, as for the import.
+	args := []string{"replication", "--project-dir", c.ProjectDir, "--threads", fmt.Sprint(c.Threads)}
 	switch c.UpdateMode {
 	case "once":
 		args = append(args, "--once")
@@ -291,12 +335,10 @@ func Replicate(ctx context.Context, c *Config) error {
 	if err := waitForDatabase(ctx, probeURL, 150, 2*time.Second); err != nil {
 		return err
 	}
-	conn, err := pgx.Connect(ctx, probeURL)
+	complete, err := readImportMarker(ctx, probeURL, c.PostgresDB)
 	if err != nil {
 		return err
 	}
-	complete := importComplete(ctx, conn, c.PostgresDB)
-	conn.Close(ctx)
 	if !complete {
 		return fmt.Errorf("no completed Nominatim import in %q; run `nominatim-ctl import` first", c.PostgresDB)
 	}
@@ -314,7 +356,7 @@ func Replicate(ctx context.Context, c *Config) error {
 
 // runGunicorn starts the API in the foreground and supervises it, so a crash
 // exits non-zero while a signalled stop exits clean.
-func runGunicorn(ctx context.Context, c *Config, r *Runner, replication *exec.Cmd) error {
+func runGunicorn(ctx context.Context, c *Config, r *Runner, stopReplication func(), replicationDone <-chan error) error {
 	args := []string{
 		"--bind", c.GunicornBind,
 		"--workers", fmt.Sprint(c.GunicornWorkers),
@@ -345,16 +387,56 @@ func runGunicorn(ctx context.Context, c *Config, r *Runner, replication *exec.Cm
 	)
 
 	Logf("starting Gunicorn with %d workers on %s as database user %q", c.GunicornWorkers, c.GunicornBind, c.WebUser)
-	cmd := api.Command(ctx, "gunicorn", args...)
+	// Runner.Command sets Cancel/WaitDelay: cancellation sends SIGTERM and
+	// escalates to SIGKILL after the drain deadline.
+	gctx, stopGunicorn := context.WithCancel(ctx)
+	defer stopGunicorn()
+	cmd := api.Command(gctx, "gunicorn", args...)
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("starting gunicorn: %w", err)
 	}
 	Logf("--> Nominatim is ready to accept requests")
+	gunicornDone := make(chan error, 1)
+	go func() { gunicornDone <- cmd.Wait() }()
 
-	// Runner.Command sets Cancel/WaitDelay: cancellation sends SIGTERM and
-	// escalates to SIGKILL after the drain deadline.
-	err := cmd.Wait()
-	stopReplication(replication)
+	var err error
+	for waiting := true; waiting; {
+		select {
+		case err = <-gunicornDone:
+			waiting = false
+		case rerr := <-replicationDone:
+			replicationDone = nil // a nil channel never fires again
+			if ctx.Err() != nil {
+				continue
+			}
+			status := "status 0"
+			if rerr != nil {
+				status = Redact(rerr.Error())
+			}
+			if c.UpdateMode != "continuous" {
+				Logf("replication (%s) finished: %s", c.UpdateMode, status)
+				continue
+			}
+			// Continuous replication is meant to run for good; serving on
+			// without it would let the data go stale unnoticed. Exit so the
+			// restart policy brings both back.
+			Logf("continuous replication exited (%s); stopping the API", status)
+			stopGunicorn()
+			<-gunicornDone
+			return fmt.Errorf("continuous replication exited: %s", status)
+		}
+	}
+	if stopReplication != nil {
+		Logf("shutting down replication process")
+		stopReplication()
+		// Let SIGTERM finish the current diff; WaitDelay bounds it.
+		if replicationDone != nil {
+			select {
+			case <-replicationDone:
+			case <-time.After(shutdownGrace + time.Second):
+			}
+		}
+	}
 
 	if ctx.Err() != nil {
 		return nil // asked to stop; this is a clean shutdown
@@ -363,14 +445,6 @@ func runGunicorn(ctx context.Context, c *Config, r *Runner, replication *exec.Cm
 		return fmt.Errorf("gunicorn exited: %w", err)
 	}
 	return errors.New("gunicorn exited unexpectedly")
-}
-
-func stopReplication(cmd *exec.Cmd) {
-	if cmd == nil || cmd.Process == nil {
-		return
-	}
-	Logf("shutting down replication process")
-	_ = cmd.Process.Signal(syscall.SIGTERM)
 }
 
 // Healthcheck probes the local API in-process, so the image needs no curl.

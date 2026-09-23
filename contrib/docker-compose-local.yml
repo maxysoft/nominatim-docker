@@ -46,6 +46,8 @@ x-database: &database
   POSTGRES_PORT: 5432
   POSTGRES_DB: nominatim
   NOMINATIM_PASSWORD: ${NOMINATIM_PASSWORD:?set NOMINATIM_PASSWORD in .env}
+  # Separate, so the read-only API role cannot log in as the owning role.
+  NOMINATIM_WEBUSER_PASSWORD: ${NOMINATIM_WEBUSER_PASSWORD:?set NOMINATIM_WEBUSER_PASSWORD in .env}
 
 # The full image, used by the import and the updater.
 x-full-image: &full-image
@@ -54,9 +56,13 @@ x-full-image: &full-image
     dockerfile: Dockerfile
   image: nominatim:local
 
-# Shared by import and updater: both write it into the .env on their common volume.
+# Shared by import and updater: both regenerate the .env on their common volume
+# from their own environment on every start, so project options from
+# howto.md#configuration (IMPORT_STYLE, REPLICATION_*, ...) belong here.
 x-replication: &replication
   REPLICATION_URL: https://download.geofabrik.de/europe/monaco-updates/
+  # Import and updater indexing threads, one database connection each.
+  THREADS: 4
 
 services:
   nominatim-postgres:
@@ -99,7 +105,8 @@ services:
     environment:
       <<: [*database, *replication]
       POSTGRES_ADMIN_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:?set POSTGRES_ADMIN_PASSWORD in .env}
-      # see https://github.com/maxysoft/nominatim-docker/blob/master/howto.md#configuration for more options
+      # Import-only settings. Project options (howto.md#configuration) go in
+      # x-replication above, or the updater drops them from the shared .env.
       PBF_URL: https://download.geofabrik.de/europe/monaco-latest.osm.pbf
       # Supplementary datasets (Wikipedia importance, GB/US postcodes, Tiger) are
       # fetched over HTTPS from nominatim.org. Set the IMPORT_* switches to "true"
@@ -125,6 +132,10 @@ services:
       - "${NOMINATIM_PORT:-8080}:8080"
     environment:
       <<: *database
+      # Each worker holds up to NOMINATIM_API_POOL_SIZE connections, so
+      # 4 x 5 + THREADS (4) stays below max_connections (50) in postgres/postgresql-local.conf.
+      GUNICORN_WORKERS: 4
+      NOMINATIM_API_POOL_SIZE: 5
     volumes:
       - nominatim-serve-data:/nominatim
     depends_on:

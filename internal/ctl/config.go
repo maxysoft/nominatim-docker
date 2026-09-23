@@ -1,13 +1,17 @@
 package ctl
 
 import (
+	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"runtime"
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
+	"time"
 )
 
 // Dataset is one optional supplementary dataset. The env var is dual-typed:
@@ -143,6 +147,7 @@ func Load() (*Config, error) {
 	if c.WebUserPassword == "" {
 		// One password still works; the roles are only really separated when
 		// the web role has its own.
+		Logf("WARNING: NOMINATIM_WEBUSER_PASSWORD is not set; the read-only %s role shares NOMINATIM_PASSWORD", c.WebUser)
 		c.WebUserPassword = c.NominatimPassword
 	}
 
@@ -296,8 +301,9 @@ func (c *Config) LibpqURL(user, password, database string) string {
 	if database == "" {
 		database = "postgres"
 	}
-	return fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=%s&application_name=nominatim-ctl",
-		urlEscape(user), urlEscape(saslprep(password)), c.PostgresHost, c.PostgresPort,
+	// JoinHostPort brackets an IPv6 literal, which a URL authority requires.
+	return fmt.Sprintf("postgres://%s:%s@%s/%s?sslmode=%s&application_name=nominatim-ctl",
+		urlEscape(user), urlEscape(saslprep(password)), net.JoinHostPort(c.PostgresHost, strconv.Itoa(c.PostgresPort)),
 		urlEscape(database), c.PostgresSSLMode)
 }
 
@@ -335,9 +341,19 @@ func envSecret(name string) (string, error) {
 	return os.Getenv(name), nil
 }
 
+// importToolsPresent is HaveImportTools, replaceable in tests.
+var importToolsPresent = HaveImportTools
+
 // RenderEnvFile builds the Nominatim project .env, regenerated in full on
 // every start so the configuration always matches the environment.
 func RenderEnvFile(c *Config) string {
+	// The file is readable by the uid the API runs as. The serve-only image
+	// never imports or replicates, so it gets the read-only web role; the full
+	// image keeps the owning role for `docker exec ... nominatim admin`.
+	dsn := c.DSN("nominatim", c.NominatimPassword)
+	if !importToolsPresent() {
+		dsn = c.DSN(c.WebUser, c.WebUserPassword)
+	}
 	kv := map[string]string{
 		"NOMINATIM_TOKENIZER":                    "icu",
 		"NOMINATIM_REPLICATION_URL":              c.ReplicationURL,
@@ -345,7 +361,7 @@ func RenderEnvFile(c *Config) string {
 		"NOMINATIM_REPLICATION_RECHECK_INTERVAL": fmt.Sprint(c.ReplicationRecheckInterval),
 		"NOMINATIM_IMPORT_STYLE":                 c.ImportStyle,
 		"NOMINATIM_FLATNODE_FILE":                c.FlatnodeFile,
-		"NOMINATIM_DATABASE_DSN":                 c.DSN("nominatim", c.NominatimPassword),
+		"NOMINATIM_DATABASE_DSN":                 dsn,
 		"NOMINATIM_DATABASE_WEBUSER":             c.WebUser,
 	}
 	if c.TigerEnabled() {
@@ -367,20 +383,68 @@ func RenderEnvFile(c *Config) string {
 }
 
 // WriteEnvFile renders and writes the project .env with owner-only
-// permissions: it holds a cleartext database password.
+// permissions: it holds a cleartext database password. PROJECT_DIR is
+// writable by the workload user, so .env may be a planted symlink; a fresh
+// file renamed over it replaces the link instead of following it as root.
 func WriteEnvFile(c *Config, uid, gid int) error {
 	path := c.EnvFilePath()
-	if err := os.WriteFile(path, []byte(RenderEnvFile(c)), 0o600); err != nil {
+	// A crash before the rename leaves a temp file holding the DSN behind.
+	// Only old ones go: a fresh one may belong to a process writing right now.
+	if stale, _ := filepath.Glob(filepath.Join(filepath.Dir(path), ".env.tmp-*")); len(stale) > 0 {
+		for _, p := range stale {
+			if fi, err := os.Lstat(p); err == nil && time.Since(fi.ModTime()) > time.Minute {
+				_ = os.Remove(p)
+			}
+		}
+	}
+	f, err := os.CreateTemp(filepath.Dir(path), ".env.tmp-*") // mode 0600
+	if err != nil {
 		return fmt.Errorf("writing %s: %w", path, err)
 	}
-	// WriteFile applies its mode only on create; correct a pre-existing file.
-	if err := os.Chmod(path, 0o600); err != nil {
-		return fmt.Errorf("chmod %s: %w", path, err)
-	}
+	defer os.Remove(f.Name()) // no-op once renamed
 	if os.Geteuid() == 0 {
-		if err := os.Chown(path, uid, gid); err != nil {
+		if err := f.Chown(uid, gid); err != nil {
+			f.Close()
 			return fmt.Errorf("chown %s: %w", path, err)
 		}
 	}
+	if _, err := f.WriteString(RenderEnvFile(c)); err != nil {
+		f.Close()
+		return fmt.Errorf("writing %s: %w", path, err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("writing %s: %w", path, err)
+	}
+	err = os.Rename(f.Name(), path)
+	if errors.Is(err, syscall.EBUSY) {
+		// .env is itself a bind mount, which cannot be renamed over; a mount
+		// point is not a symlink, so rewrite it in place.
+		err = writeInPlace(path, RenderEnvFile(c), uid, gid)
+	}
+	if err != nil {
+		return fmt.Errorf("writing %s: %w", path, err)
+	}
 	return nil
+}
+
+func writeInPlace(path, content string, uid, gid int) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC|syscall.O_NOFOLLOW, 0o600)
+	if err != nil {
+		return err
+	}
+	if err := f.Chmod(0o600); err != nil {
+		f.Close()
+		return err
+	}
+	if os.Geteuid() == 0 {
+		if err := f.Chown(uid, gid); err != nil {
+			f.Close()
+			return err
+		}
+	}
+	if _, err := f.WriteString(content); err != nil {
+		f.Close()
+		return err
+	}
+	return f.Close()
 }

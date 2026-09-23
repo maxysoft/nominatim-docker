@@ -51,10 +51,16 @@ x-database: &database
   POSTGRES_PORT: 5432
   POSTGRES_DB: nominatim
   NOMINATIM_PASSWORD: ${NOMINATIM_PASSWORD:?set NOMINATIM_PASSWORD in .env}
+  # Separate, so the read-only API role cannot log in as the owning role.
+  NOMINATIM_WEBUSER_PASSWORD: ${NOMINATIM_WEBUSER_PASSWORD:?set NOMINATIM_WEBUSER_PASSWORD in .env}
 
-# Shared by import and updater: both write it into the .env on their common volume.
+# Shared by import and updater: both regenerate the .env on their common volume
+# from their own environment on every start, so project options from
+# howto.md#configuration (IMPORT_STYLE, REPLICATION_*, ...) belong here.
 x-replication: &replication
   REPLICATION_URL: https://ftp5.gwdg.de/pub/misc/openstreetmap/planet.openstreetmap.org/replication/day/
+  # Import and updater indexing threads, one database connection each.
+  THREADS: 16
 
 services:
   nominatim-postgres:
@@ -102,13 +108,12 @@ services:
     environment:
       <<: [*database, *replication]
       POSTGRES_ADMIN_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:?set POSTGRES_ADMIN_PASSWORD in .env}
-      # https://ftp5.gwdg.de/pub/misc/openstreetmap/planet.openstreetmap.org/pbf/planet-latest.osm.pbf returns 404.
-      # Use a specific dated version:
-      PBF_URL: https://ftp5.gwdg.de/pub/misc/openstreetmap/planet.openstreetmap.org/pbf/planet-250317.osm.pbf
+      # Redirects to the current weekly dump. If a new one is published while
+      # the ~95 GB download is resuming, it restarts on the new file (If-Range).
+      PBF_URL: https://planet.openstreetmap.org/pbf/planet-latest.osm.pbf
       IMPORT_WIKIPEDIA: "true"
       IMPORT_US_POSTCODES: "true"
       IMPORT_GB_POSTCODES: "true"
-      THREADS: 16
     volumes:
       - type: bind
         source: /data/nominatim
@@ -129,6 +134,10 @@ services:
       - "8080:8080"
     environment:
       <<: *database
+      # Each worker holds up to NOMINATIM_API_POOL_SIZE connections, so
+      # 16 x 5 + THREADS (16) stays below max_connections (200) in postgres/planet-postgresql.conf.
+      GUNICORN_WORKERS: 16
+      NOMINATIM_API_POOL_SIZE: 5
     volumes:
       - nominatim-serve-data:/nominatim
     depends_on:

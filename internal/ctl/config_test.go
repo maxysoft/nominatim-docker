@@ -314,6 +314,9 @@ func TestRenderEnvFileIsIdempotent(t *testing.T) {
 }
 
 func TestRenderEnvFileTracksConfigChanges(t *testing.T) {
+	// The full image: its .env carries the application role that rotates here.
+	defer func(f func() bool) { importToolsPresent = f }(importToolsPresent)
+	importToolsPresent = func() bool { return true }
 	c := testConfig()
 	before := RenderEnvFile(c)
 
@@ -377,5 +380,62 @@ func TestIntervalIsReplacedNotSpliced(t *testing.T) {
 	}
 	if strings.Contains(out, "3000") {
 		t.Fatalf("interval was spliced rather than replaced:\n%s", out)
+	}
+}
+
+// .env sits in a directory the workload user can write to, and is rewritten
+// as root on every start: a symlink there must be replaced, never followed.
+func TestWriteEnvFileReplacesSymlink(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "victim")
+	if err := os.WriteFile(target, []byte("untouched"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c := &Config{ProjectDir: dir}
+	if err := os.Symlink(target, c.EnvFilePath()); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteEnvFile(c, os.Getuid(), os.Getgid()); err != nil {
+		t.Fatalf("WriteEnvFile: %v", err)
+	}
+	if got, _ := os.ReadFile(target); string(got) != "untouched" {
+		t.Fatalf("symlink target overwritten: %q", got)
+	}
+	fi, err := os.Lstat(c.EnvFilePath())
+	if err != nil || !fi.Mode().IsRegular() || fi.Mode().Perm() != 0o600 {
+		t.Fatalf(".env = %v (%v), want a regular 0600 file", fi.Mode(), err)
+	}
+}
+
+// An IPv6 literal must be bracketed, or the URL does not parse at all.
+func TestLibpqURLBracketsIPv6(t *testing.T) {
+	c := &Config{PostgresHost: "fd00::5", PostgresPort: 5432, PostgresSSLMode: "prefer"}
+	u, err := url.Parse(c.LibpqURL("nominatim", "pw", "nominatim"))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if u.Hostname() != "fd00::5" || u.Port() != "5432" {
+		t.Fatalf("host %q port %q", u.Hostname(), u.Port())
+	}
+}
+
+// The serve-only image's .env is readable by the API's uid, so it must not
+// hold the owning role's password.
+func TestRenderEnvFileServeImageUsesWebRole(t *testing.T) {
+	withEnv(t, baseEnv())
+	t.Setenv("NOMINATIM_WEBUSER_PASSWORD", "web-password-1")
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	defer func(f func() bool) { importToolsPresent = f }(importToolsPresent)
+
+	importToolsPresent = func() bool { return false }
+	if env := RenderEnvFile(c); !strings.Contains(env, "user=www-data;password=web-password-1;") || strings.Contains(env, "user=nominatim;") {
+		t.Fatalf("serve image .env must carry only the web role:\n%s", env)
+	}
+	importToolsPresent = func() bool { return true }
+	if env := RenderEnvFile(c); !strings.Contains(env, "user=nominatim;") {
+		t.Fatalf("full image .env must carry the application role:\n%s", env)
 	}
 }

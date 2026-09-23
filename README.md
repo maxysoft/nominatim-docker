@@ -35,6 +35,10 @@ The easiest way to use Nominatim Docker is by pulling the pre-built images from 
 To quickly get a Nominatim instance up and running with a small dataset (e.g., Monaco):
 
 ```sh
+# Set the three database passwords first; every compose file refuses to start without them
+cp contrib/.env.example contrib/.env
+$EDITOR contrib/.env
+
 # Use the provided docker-compose configuration
 docker compose -f contrib/docker-compose.yml up
 ```
