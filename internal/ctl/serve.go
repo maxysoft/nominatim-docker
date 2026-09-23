@@ -8,7 +8,6 @@ import (
 	"os"
 	"strings"
 	"time"
-
 )
 
 // nominatimHome matches the account created in the Dockerfile.
