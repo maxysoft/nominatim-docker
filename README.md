@@ -14,6 +14,8 @@
 
 The easiest way to use Nominatim Docker is by pulling the pre-built images from [Docker Hub](https://hub.docker.com/r/maxysoft/nominatim-docker) or [Github Packages](https://github.com/maxysoft/nominatim-docker/pkgs/container/nominatim-docker).
 
+Upgrading an existing deployment from the shell-based image? Follow [docs/MIGRATION.md](docs/MIGRATION.md).
+
 To quickly get a Nominatim instance up and running with a small dataset (e.g., Monaco):
 
 ```sh

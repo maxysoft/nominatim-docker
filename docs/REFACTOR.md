@@ -275,22 +275,9 @@ are pinned to commit SHAs and the workflow has a least-privilege
 
 ### Migrating an existing deployment
 
-```bash
-# 1. Set the two passwords explicitly. There is no default any more.
-cp contrib/.env.example contrib/.env && $EDITOR contrib/.env
-
-# 2. Downgrade the application role and install the extensions centrally.
-psql -h "$POSTGRES_HOST" -U postgres -c 'ALTER ROLE nominatim NOSUPERUSER CREATEDB;'
-psql -h "$POSTGRES_HOST" -U postgres -d template1 \
-     -c 'CREATE EXTENSION IF NOT EXISTS postgis; CREATE EXTENSION IF NOT EXISTS hstore;'
-
-# 3. Adopt the roles this image now manages, so it may rotate their passwords.
-psql -h "$POSTGRES_HOST" -U postgres \
-     -c "COMMENT ON ROLE nominatim IS 'managed by nominatim-docker';" \
-     -c "COMMENT ON ROLE \"www-data\" IS 'managed by nominatim-docker';"
-```
-
-The existing data volume and database are reused; no re-import is needed.
+Step-by-step instructions, including the environment, compose and PostgreSQL changes, are in
+[MIGRATION.md](MIGRATION.md). The existing data volume and database are reused; no re-import is
+needed.
 
 ---
 

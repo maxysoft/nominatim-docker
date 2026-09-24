@@ -9,7 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Unreleased: entrypoint rewritten in Go
 
-Full rationale, parity matrix and migration steps: [docs/REFACTOR.md](docs/REFACTOR.md).
+Upgrading from the shell-based image: [docs/MIGRATION.md](docs/MIGRATION.md). Rationale and parity
+matrix: [docs/REFACTOR.md](docs/REFACTOR.md).
 
 - **Breaking:** `NOMINATIM_PASSWORD` is required (the hardcoded default is gone) and
   `POSTGRES_ADMIN_PASSWORD` is required for the initial import, never derived from it. The compose
@@ -24,7 +25,7 @@ Full rationale, parity matrix and migration steps: [docs/REFACTOR.md](docs/REFAC
   PostGIS/hstore extensions are installed into `template1` (`PROVISION_EXTENSIONS=false` opts out,
   `NOMINATIM_ROLE_OPTIONS=SUPERUSER` restores the old role; a managed role loses `SUPERUSER` once it
   is no longer listed). Roles the container did not create must be tagged
-  `managed by nominatim-docker` first; see the migration steps in REFACTOR.md.
+  `managed by nominatim-docker` first; see [docs/MIGRATION.md](docs/MIGRATION.md).
 - **Breaking:** `sudo` is gone (use `docker exec -u nominatim ...`); `.env` is regenerated on every
   start, so hand edits are lost; dataset paths must be absolute; `UPDATE_MODE` and the replication
   intervals are validated at startup; a crashed Gunicorn exits non-zero. Volumes written by the
@@ -38,7 +39,8 @@ Full rationale, parity matrix and migration steps: [docs/REFACTOR.md](docs/REFAC
   `NOMINATIM_WEBUSER_PASSWORD`, `GUNICORN_BIND`, `GUNICORN_TIMEOUT`, `GUNICORN_GRACEFUL_TIMEOUT`,
   `NOMINATIM_ROLE_OPTIONS`, `PROVISION_EXTENSIONS`, `*_SHA256` checksums and `_FILE` variants for
   the passwords; all listed in [howto.md](howto.md#general-parameters).
-- **Added:** A `HEALTHCHECK` on `/status.php`, implemented in the entrypoint (no curl in the image).
+- **Added:** A `HEALTHCHECK` on `/status.php`, implemented in the entrypoint (no curl in the image);
+  healthy only when Nominatim reports status 0, not merely HTTP 200.
 - **Added:** `make check`, `make integration` and `test/integration.sh`, a local stack that imports
   Monaco and asserts the API surface, privilege model, restart and shutdown behaviour.
 - **Changed:** `config.sh`, `init.sh` and `start.sh` are replaced by `nominatim-ctl`, a static Go

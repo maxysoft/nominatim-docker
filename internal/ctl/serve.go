@@ -2,8 +2,10 @@ package ctl
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"strings"
@@ -478,6 +480,19 @@ func Healthcheck(bind string) error {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("status endpoint returned %s", resp.Status)
+	}
+	// Nominatim answers 200 even when it cannot reach its database; only the
+	// body says so ("status": 700), and a healthy-but-broken API is never
+	// restarted or taken out of rotation.
+	var st struct {
+		Status  *int   `json:"status"`
+		Message string `json:"message"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&st); err != nil {
+		return fmt.Errorf("status endpoint returned no JSON status: %w", err)
+	}
+	if st.Status == nil || *st.Status != 0 {
+		return fmt.Errorf("status endpoint reports failure: %s", st.Message)
 	}
 	return nil
 }
