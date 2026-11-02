@@ -1,8 +1,6 @@
 .project
 actionlint
 
-# Local secrets for the contrib compose stacks.
 .env
 
-# Container logs captured for debugging.
 *.log

@@ -1,23 +1,13 @@
 #!/usr/bin/env bash
-#
-# Local integration test: builds the image, imports Monaco into a throwaway
-# PostGIS, and asserts the API, privilege, restart, shutdown and split-stack
-# behaviour.
-#
-# Usage: test/integration.sh [scenario ...]
-# Scenarios: full security restart volume_loss serve_image shutdown failfast
-#            unicode_password split drop_guard
 
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
 COMPOSE="docker compose -f test/docker-compose.test.yml"
-# Overridable: 8080 is commonly already taken on a dev host.
 ITEST_PORT="${ITEST_PORT:-18080}"
 export ITEST_PORT
 BASE_URL="http://127.0.0.1:${ITEST_PORT}"
-# The shipped local stack, under its own project so it cannot collide with a developer's copy.
 SPLIT="docker compose -f contrib/docker-compose-local.yml -p nominatim-itest-split --profile updates"
 # Exported once so the EXIT trap can interpolate the compose file too.
 export NOMINATIM_PORT=$((ITEST_PORT + 2)) NOMINATIM_PASSWORD=itest-nominatim-password NOMINATIM_WEBUSER_PASSWORD=itest-web-password POSTGRES_ADMIN_PASSWORD=itest-admin-password
@@ -38,7 +28,6 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# wait_for_api waits until /status.php reports ready, or the container dies.
 wait_for_api() {
   local deadline=$((SECONDS + ${1:-900}))
   while ((SECONDS < deadline)); do
@@ -57,14 +46,12 @@ wait_for_api() {
   return 1
 }
 
-# status_ok URL: a status.php URL reports status 0. The HTTP code alone proves
-# nothing: Nominatim answers 200 {"status":700} when it cannot reach the DB.
+# The HTTP code alone proves nothing: Nominatim answers 200 {"status":700} when it cannot reach the DB.
 status_ok() {
   local body
   body=$(curl -fsS --max-time 5 "$1" 2>/dev/null) && [[ $body == *'"status":0'* ]]
 }
 
-# wait_url URL [TRIES] polls a status.php URL every 2 s until it reports status 0.
 wait_url() {
   for _ in $(seq 1 "${2:-60}"); do
     status_ok "$1" && return 0
@@ -73,14 +60,12 @@ wait_url() {
   return 1
 }
 
-# wait_for_exit CONTAINER SECONDS prints the container's exit code, or "timeout".
 wait_for_exit() {
   [[ -z "$1" ]] && { echo missing; return; }
   timeout "$2" docker wait "$1" 2>/dev/null || echo timeout
 }
 
-# logs_contain main|split SERVICE PATTERN. Captures first: piping into grep -q
-# trips pipefail (SIGPIPE, rc 141) when grep matches early.
+# Captures first: piping into grep -q trips pipefail (SIGPIPE, rc 141).
 logs_contain() {
   local out
   case $1 in
@@ -90,8 +75,7 @@ logs_contain() {
   grep -q -- "$3" <<<"$out"
 }
 
-# service_running main|split SERVICE. Captures first, for the same pipefail
-# reason as logs_contain.
+# Captures first, for the same pipefail reason as logs_contain.
 service_running() {
   local out
   case $1 in
@@ -101,7 +85,6 @@ service_running() {
   grep -qx -- "$2" <<<"$out"
 }
 
-# assert_json_nonempty URL DESCRIPTION
 assert_json_nonempty() {
   local body
   body=$(curl -fsS --max-time 30 "$BASE_URL$1" 2>/dev/null || true)
@@ -112,7 +95,6 @@ assert_json_nonempty() {
   fi
 }
 
-# assert_contains URL PATTERN DESCRIPTION
 assert_contains() {
   local body
   body=$(curl -fsS --max-time 30 "$BASE_URL$1" 2>/dev/null || true)
@@ -165,8 +147,6 @@ scenario_full() {
   fi
 }
 
-# The application role must no longer be a superuser, and the API must not be
-# connecting as it.
 scenario_security() {
   log "scenario: privilege and hardening"
 
@@ -195,9 +175,7 @@ scenario_security() {
     bad "no www-data connections observed (saw: ${api_users:-none})"
   fi
 
-  # No setuid *or setgid* binaries: the image must be safe under
-  # no-new-privileges. Checking only -4000 would miss the setgid bit the
-  # Dockerfile also strips.
+  # Check setgid as well as setuid: the Dockerfile strips both.
   local setuid
   setuid=$($COMPOSE exec -T nominatim find / -xdev \( -perm -4000 -o -perm -2000 \) -type f 2>/dev/null | head -5 || true)
   if [[ -z "$setuid" ]]; then
@@ -214,7 +192,6 @@ scenario_security() {
     fi
   done
 
-  # The rendered config must be owner-readable only and free of placeholders.
   local mode
   mode=$($COMPOSE exec -T nominatim stat -c '%a' /nominatim/.env 2>/dev/null | tr -d '[:space:]' || true)
   if [[ "$mode" == "600" ]]; then
@@ -229,10 +206,7 @@ scenario_security() {
     ok "no placeholder tokens in .env"
   fi
 
-  # The workload must not be running as root.
-  # Read the UID numerically from /proc inside the container. `docker top`
-  # resolves UIDs against the *host* passwd file, so it reports whatever the
-  # host calls uid 1000 rather than "nominatim".
+  # Read the UID from /proc: docker top resolves UIDs against the host passwd file.
   local api_uid
   # shellcheck disable=SC2016  # $d must expand in the container's shell, not here
   api_uid=$($COMPOSE exec -T nominatim sh -c \
@@ -245,7 +219,6 @@ scenario_security() {
   fi
 }
 
-# Restarting must reuse the existing database rather than dropping it.
 scenario_restart() {
   log "scenario: restart reuses the existing import"
 
@@ -266,8 +239,7 @@ scenario_restart() {
     bad "placex changed across restart: $before -> $after"
   fi
 
-  # Poll: there is a short lag between the container writing a line and
-  # `docker compose logs` being able to read it back.
+  # Poll: docker compose logs lags briefly behind the container writing a line.
   local found=0
   for _ in $(seq 1 30); do
     if logs_contain main nominatim 'skipping import'; then
@@ -282,8 +254,6 @@ scenario_restart() {
     bad "restart did not report skipping the import"
   fi
 
-  # A valid import without the marker (pg_restore into a fresh database) is
-  # validated and adopted even under ALLOW_DROP_EXISTING_DB, never dropped.
   $COMPOSE exec -T postgres psql -U postgres -qc "COMMENT ON DATABASE nominatim IS NULL" >/dev/null
   local out rc marker
   set +e
@@ -302,7 +272,6 @@ scenario_restart() {
   fi
 }
 
-# Losing the application volume must NOT drop a populated database.
 scenario_volume_loss() {
   log "scenario: losing the project volume does not drop the database"
 
@@ -325,8 +294,6 @@ scenario_volume_loss() {
   fi
 }
 
-# The slim --target serve image must serve an existing import, but refuse to
-# create one. Reuses the imported stack from earlier scenarios, or starts it.
 scenario_serve_image() {
   log "scenario: serve-only image"
   if ! service_running main nominatim; then
@@ -347,8 +314,6 @@ scenario_serve_image() {
     fi
   done
 
-  # Against a database that holds no import it must fail fast and say why,
-  # before downloading or provisioning anything.
   local out rc
   set +e
   out=$(docker run --rm --network nominatim-itest_default \
@@ -367,10 +332,7 @@ scenario_serve_image() {
     bad "serve image did not refuse the import (rc=$rc): ${out:0:200}"
   fi
 
-  # And it must serve the import the full image created, on a read-only root
-  # filesystem, which is how the shipped compose files run it. The project dir
-  # is a named volume, not a tmpfs: volumes seed ownership from the image,
-  # tmpfs mounts come up root-owned.
+  # The project dir is a named volume, not a tmpfs: volumes seed ownership from the image, tmpfs mounts come up root-owned.
   docker rm -f itest-serve >/dev/null 2>&1 || true
   docker run -d --name itest-serve --network nominatim-itest_default \
     --read-only --tmpfs /tmp --tmpfs /var/lib/nominatim \
@@ -393,7 +355,6 @@ scenario_serve_image() {
   docker rm -f itest-serve >/dev/null 2>&1 || true
 }
 
-# A crashed API must not report success, and a stop must exit 0 promptly.
 scenario_shutdown() {
   log "scenario: shutdown semantics"
 
@@ -416,7 +377,6 @@ scenario_shutdown() {
   fi
 }
 
-# A misconfiguration must fail loudly and immediately, not hang.
 scenario_failfast() {
   log "scenario: misconfiguration fails fast"
 
@@ -443,7 +403,6 @@ scenario_failfast() {
     bad "invalid UPDATE_MODE accepted (rc=$rc): ${out:0:200}"
   fi
 
-  # A rejected password must fail in seconds, not after the connection budget.
   $COMPOSE up -d postgres >/dev/null 2>&1
   set +e
   out=$(timeout 90 docker run --rm --network nominatim-itest_default \
@@ -459,13 +418,9 @@ scenario_failfast() {
   fi
 }
 
-# A non-ASCII password only authenticates if our SASLprep matches the server's.
-# No unit test can establish that; it needs a real PostgreSQL.
 scenario_unicode_password() {
   log "scenario: non-ASCII password (SASLprep)"
   cleanup
-  # Contains a soft hyphen (mapped away), a no-break space (mapped to a space)
-  # and multi-byte characters.
   ITEST_PASSWORD=$'pä\u00adss\u00a0wörd-Ω' $COMPOSE up -d
   if wait_for_api 1200; then
     ok "API authenticates with a non-ASCII password"
@@ -474,24 +429,19 @@ scenario_unicode_password() {
     bad "container never came up with a non-ASCII password"
   fi
 
-  # And the cleartext must not be in the logs.
   if logs_contain main nominatim 'wörd'; then
     bad "cleartext password appeared in the container log"
   else
     ok "password absent from the container log"
   fi
-  # Its stack uses a password later scenarios do not pass; never reuse it.
   cleanup
 }
 
-# A database holding tables of its own must be refused, never dropped or
-# imported over, when it carries no completion marker.
 scenario_drop_guard() {
   log "scenario: drop guard"
   cleanup
   $COMPOSE up -d postgres >/dev/null 2>&1
-  # Over TCP: the image's temporary init server listens on the socket only,
-  # so this reaches the final server, not one about to restart.
+  # Over TCP: the image's temporary init server listens on the socket only, so this reaches the final server.
   pg() { $COMPOSE exec -T postgres psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 -qtA "$@"; }
   for _ in $(seq 60); do pg -c 'SELECT 1' >/dev/null 2>&1 && break; sleep 2; done
   pg -c 'SELECT 1' >/dev/null 2>&1 || { bad "postgres never became ready for drop_guard"; return; }
@@ -517,8 +467,6 @@ scenario_drop_guard() {
     bad "its data is gone"
   fi
 
-  # A nominatim role that cannot connect makes validation impossible, which
-  # must never read as "invalid", even with ALLOW_DROP_EXISTING_DB.
   pg -c "REVOKE CONNECT ON DATABASE guarded FROM PUBLIC" >/dev/null
   set +e
   out=$(timeout 300 docker run --rm --network nominatim-itest_default \
@@ -534,8 +482,7 @@ scenario_drop_guard() {
     bad "unvalidatable database not refused (rc=$rc): ${out: -300}"
   fi
 
-  # While another session holds the import lock, a container waits and
-  # decides nothing. The key must match importLockClass in internal/ctl/db.go.
+  # The key must match importLockClass in internal/ctl/db.go.
   pg -c "SELECT pg_advisory_lock(1313820489, hashtext('guarded'))" -c "SELECT pg_sleep(30)" >/dev/null 2>&1 &
   for _ in $(seq 20); do
     [[ "$(pg -c "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND granted" 2>/dev/null)" == 1 ]] && break
@@ -557,8 +504,6 @@ scenario_drop_guard() {
   wait
 }
 
-# One-shot import on the full image, serve-only API without admin credentials,
-# idempotent re-runs, updater.
 scenario_split() {
   log "scenario: split deployment (contrib/docker-compose-local.yml)"
   $SPLIT down --volumes --remove-orphans >/dev/null 2>&1 || true
@@ -577,7 +522,6 @@ scenario_split() {
     $SPLIT logs --tail 40 nominatim-import
     return
   fi
-  # The API depends on service_completed_successfully, now satisfied.
   $SPLIT up -d nominatim >/dev/null 2>&1 || true
 
   if wait_url "$url/status.php?format=json"; then
@@ -600,7 +544,6 @@ scenario_split() {
     bad "POSTGRES_ADMIN_PASSWORD present in the API container"
   fi
 
-  # A second `up` re-runs the one-shot service; it must skip, not refuse.
   local before after
   before=$($SPLIT exec -T nominatim-postgres psql -U postgres -d nominatim -tAc "SELECT count(*) FROM placex" 2>/dev/null | tr -d '[:space:]' || true)
   $SPLIT up -d nominatim-import >/dev/null 2>&1 || true
@@ -618,7 +561,6 @@ scenario_split() {
     bad "placex changed across the re-run: $before -> $after"
   fi
 
-  # The updater must initialise replication and keep running.
   $SPLIT up -d nominatim-updater >/dev/null 2>&1 || true
   local started=0
   for _ in $(seq 1 45); do

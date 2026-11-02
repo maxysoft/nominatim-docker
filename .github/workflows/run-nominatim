@@ -1,11 +1,5 @@
 #!/bin/sh
-# Runs the image under test against the start-postgres database with the
-# settings every CI scenario shares. Scenario flags (-e, -v, -d) go first.
-# Each matrix leg has its own runner, so the names and port are fixed. No
-# --rm: the shutdown scenario inspects the exit code, the restart scenario
-# removes the container itself.
-#
-# Usage: run-nominatim [docker run flags ...]
+# No --rm: the shutdown scenario inspects the exit code and the restart scenario removes the container itself.
 set -eu
 
 exec docker run -i --network nominatim-net --shm-size 1g \

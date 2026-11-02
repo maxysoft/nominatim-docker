@@ -7,8 +7,6 @@ import (
 	"testing"
 )
 
-// Gunicorn connects as the web role on purpose; inheriting NOMINATIM_PASSWORD
-// from the container environment would hand it the CREATEDB role regardless.
 func TestBaseEnvWithholdsRolePasswords(t *testing.T) {
 	withEnv(t, baseEnv())
 	t.Setenv("NOMINATIM_WEBUSER_PASSWORD", "web-pw")
@@ -30,8 +28,6 @@ func TestBaseEnvWithholdsRolePasswords(t *testing.T) {
 	}
 }
 
-// status.php answers 200 even when the database is unreachable; the
-// healthcheck must read the body, or a broken API stays "healthy".
 func TestHealthcheckReadsStatusBody(t *testing.T) {
 	for body, wantOK := range map[string]bool{
 		`{"status":0,"message":"OK","data_updated":"2026-01-01T00:00:00+00:00"}`: true,

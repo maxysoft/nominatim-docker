@@ -1,9 +1,3 @@
-# Every target runs inside a container: nothing is installed on the host.
-#
-# Dependency and compiler caches are named volumes, otherwise each run
-# recompiles the world.
-
-# The digest pins live once, in the Dockerfile.
 GO_IMAGE   ?= $(shell sed -n 's/^FROM \(.*\) AS go-build$$/\1/p' Dockerfile)
 BASE_IMAGE ?= $(shell sed -n 's/^FROM \(.*\) AS base$$/\1/p' Dockerfile)
 UID        := $(shell id -u)
@@ -21,7 +15,6 @@ GO_RUN = docker run --rm -u $(UID):$(GID) \
 help:
 	@grep -hE '^[a-z-]+:.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | column -t -s "$$(printf '\t')"
 
-# Fresh named volumes are root-owned; the toolchain runs as the invoking user.
 gocache:
 	docker run --rm -v nominatim-gocache-mod:/gocache/mod -v nominatim-gocache-build:/gocache/build \
 		$(GO_IMAGE) chown $(UID):$(GID) /gocache/mod /gocache/build
@@ -54,8 +47,6 @@ build: ## Build the container image
 	DOCKER_BUILDKIT=1 docker build -t nominatim-docker:dev .
 
 requirements: ## Regenerate requirements.txt with pinned versions and hashes
-	# Resolved on the same base the image builds on, so the pins match reality.
-	# pyicu is excluded: it has no wheel and is supplied by Debian's python3-icu.
 	docker run --rm -v $(CURDIR):/src -w /src -e DEBIAN_FRONTEND=noninteractive $(BASE_IMAGE) sh -c '\
 		apt-get -qq update && \
 		apt-get -qq install -y --no-install-recommends \

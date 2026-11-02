@@ -17,30 +17,18 @@ import (
 	"time"
 )
 
-// fetchAttempts is the total number of tries per file: a planet PBF takes
-// hours, and one transient reset must not discard it.
 const fetchAttempts = 5
 
-// Downloader fetches files over HTTPS, authenticated by the system CA bundle.
-// One of the fetched artifacts is a SQL dump that is executed against the
-// database, so server authentication is not optional.
 type Downloader struct {
 	Client    *http.Client
 	UserAgent string
 
-	// Backoff is the delay before the second attempt, doubled each time.
-	Backoff time.Duration
-	// IdleTimeout aborts an attempt that receives no body bytes for this
-	// long, so a stalled but open connection is retried instead of hanging.
+	Backoff     time.Duration
 	IdleTimeout time.Duration
 }
 
-// NewDownloader returns a Downloader tuned for multi-GB files on a slow link:
-// no overall deadline, but bounded handshake, response-header and idle-body
-// timeouts so a black-holed or stalled connection cannot hang forever.
 func NewDownloader(userAgent string) *Downloader {
-	// The default transport already honours HTTPS_PROXY/HTTP_PROXY/NO_PROXY, as
-	// curl did, and bounds the dial; its 10s TLS handshake is too short here.
+	// Never relax TLS verification: a downloaded SQL dump is executed against the database.
 	t := http.DefaultTransport.(*http.Transport).Clone()
 	t.TLSHandshakeTimeout = 30 * time.Second
 	t.ResponseHeaderTimeout = 60 * time.Second
@@ -52,15 +40,11 @@ func NewDownloader(userAgent string) *Downloader {
 	}
 }
 
-// errPermanent wraps a failure that retrying cannot fix.
 type errPermanent struct{ err error }
 
 func (e errPermanent) Error() string { return e.err.Error() }
 func (e errPermanent) Unwrap() error { return e.err }
 
-// Fetch downloads url to dest, resuming a partial file when the server
-// supports it and retrying transient failures. When sha256Hex is non-empty
-// the completed file is verified and removed on mismatch.
 func (d *Downloader) Fetch(ctx context.Context, url, dest, sha256Hex string) error {
 	backoff := d.Backoff
 
@@ -88,11 +72,9 @@ func (d *Downloader) Fetch(ctx context.Context, url, dest, sha256Hex string) err
 	return fmt.Errorf("downloading %s failed after %d attempts: %w", url, fetchAttempts, last)
 }
 
-// fetchState records what dest holds, so a later run resumes only a partial
-// download of the same URL and version instead of splicing another file on.
 type fetchState struct {
 	URL       string `json:"url"`
-	Validator string `json:"validator,omitempty"` // strong ETag or Last-Modified
+	Validator string `json:"validator,omitempty"`
 	Complete  bool   `json:"complete"`
 }
 
@@ -101,7 +83,7 @@ func statePath(dest string) string { return dest + ".source" }
 func readState(dest string) fetchState {
 	var st fetchState
 	if b, err := os.ReadFile(statePath(dest)); err == nil {
-		_ = json.Unmarshal(b, &st) // unreadable state just means "start over"
+		_ = json.Unmarshal(b, &st)
 	}
 	return st
 }
@@ -114,8 +96,6 @@ func writeState(dest string, st fetchState) error {
 	return writeFileNoFollow(statePath(dest), b)
 }
 
-// writeFileNoFollow replaces path with data. The project directory is writable
-// by the workload user, so a planted symlink must be replaced, not followed.
 func writeFileNoFollow(path string, data []byte) error {
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
@@ -131,8 +111,6 @@ func writeFileNoFollow(path string, data []byte) error {
 	return f.Close()
 }
 
-// strongValidator returns what If-Range may carry: a strong ETag, else
-// Last-Modified. A weak ETag is not allowed there.
 func strongValidator(h http.Header) string {
 	if etag := h.Get("ETag"); etag != "" && !strings.HasPrefix(etag, "W/") {
 		return etag
@@ -140,7 +118,6 @@ func strongValidator(h http.Header) string {
 	return h.Get("Last-Modified")
 }
 
-// idleReader pushes back a deadline timer on every read that returns data.
 type idleReader struct {
 	r     io.Reader
 	timer *time.Timer
@@ -159,8 +136,6 @@ func (d *Downloader) fetchOnce(ctx context.Context, url, dest, sha256Hex string)
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		return errPermanent{err}
 	}
-	// A symlink left by an earlier IMPORT_X=/path run must be replaced, not
-	// written through into the operator's own file.
 	if fi, err := os.Lstat(dest); err == nil && fi.Mode()&os.ModeSymlink != 0 {
 		if err := os.Remove(dest); err != nil {
 			return errPermanent{err}
@@ -170,18 +145,13 @@ func (d *Downloader) fetchOnce(ctx context.Context, url, dest, sha256Hex string)
 	st := readState(dest)
 	fi, statErr := os.Stat(dest)
 	if statErr == nil && st.URL == url && st.Complete {
-		err := verifyChecksum(dest, sha256Hex) // finished by an earlier run
+		err := verifyChecksum(dest, sha256Hex)
 		if err == nil {
 			return nil
 		}
-		// Upstream republished and the operator updated the checksum:
-		// verifyChecksum removed the old file, so fetch the current one.
 		Logf("%v; downloading again", err)
 		st, statErr = fetchState{}, os.ErrNotExist
 	}
-	// Resume only our own partial of this URL and version; anything else
-	// starts over. Without a validator there is no If-Range, and a
-	// republished file would be spliced onto the partial.
 	var offset int64
 	if statErr == nil && st.URL == url && st.Validator != "" && fi.Size() > 0 {
 		offset = fi.Size()
@@ -193,27 +163,23 @@ func (d *Downloader) fetchOnce(ctx context.Context, url, dest, sha256Hex string)
 	if err != nil {
 		return errPermanent{err}
 	}
-	// nominatim.org rejects requests without a User-Agent.
 	req.Header.Set("User-Agent", d.UserAgent)
 	if offset > 0 {
 		req.Header.Set("Range", fmt.Sprintf("bytes=%d-", offset))
-		// Upstream republished the file since: the server sends it whole.
 		req.Header.Set("If-Range", st.Validator)
 	}
 
 	resp, err := d.Client.Do(req)
 	if err != nil {
-		return fmt.Errorf("GET %s: %w", url, err) // transient: retry
+		return fmt.Errorf("GET %s: %w", url, err)
 	}
 	defer resp.Body.Close()
 
 	flags := os.O_CREATE | os.O_WRONLY | syscall.O_NOFOLLOW
 	switch resp.StatusCode {
 	case http.StatusOK:
-		flags |= os.O_TRUNC // new file, or the server ignored the range
+		flags |= os.O_TRUNC
 	case http.StatusPartialContent:
-		// Trust the range only if it starts where our file ends; a mismatched
-		// offset would splice unrelated bytes into the file.
 		if start, ok := parseContentRangeStart(resp.Header.Get("Content-Range")); !ok || start != offset {
 			Logf("server returned an unexpected Content-Range (%q, wanted start %d); restarting download",
 				resp.Header.Get("Content-Range"), offset)
@@ -221,13 +187,10 @@ func (d *Downloader) fetchOnce(ctx context.Context, url, dest, sha256Hex string)
 			if err := os.Remove(dest); err != nil && !errors.Is(err, os.ErrNotExist) {
 				return errPermanent{err}
 			}
-			return fmt.Errorf("range mismatch for %s", url) // retry from scratch
+			return fmt.Errorf("range mismatch for %s", url)
 		}
 		flags |= os.O_APPEND
 	case http.StatusRequestedRangeNotSatisfiable:
-		// A partial of exactly the remote length is a finished download whose
-		// completion was never recorded (killed right after the last byte).
-		// Only with If-Range sent: that is what confirms the same version.
 		if total, ok := parseContentRangeTotal(resp.Header.Get("Content-Range")); ok && offset > 0 && total == offset {
 			st.Complete = true
 			if err := writeState(dest, st); err != nil {
@@ -235,7 +198,6 @@ func (d *Downloader) fetchOnce(ctx context.Context, url, dest, sha256Hex string)
 			}
 			return verifyChecksum(dest, sha256Hex)
 		}
-		// Longer than the remote file, or unverifiable: start over.
 		if err := os.Remove(dest); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return errPermanent{err}
 		}
@@ -244,7 +206,7 @@ func (d *Downloader) fetchOnce(ctx context.Context, url, dest, sha256Hex string)
 		return fmt.Errorf("GET %s: %s", url, resp.Status)
 	default:
 		if resp.StatusCode >= 500 {
-			return fmt.Errorf("GET %s: %s", url, resp.Status) // transient
+			return fmt.Errorf("GET %s: %s", url, resp.Status)
 		}
 		return errPermanent{fmt.Errorf("GET %s: unexpected status %s", url, resp.Status)}
 	}
@@ -253,8 +215,6 @@ func (d *Downloader) fetchOnce(ctx context.Context, url, dest, sha256Hex string)
 	if err != nil {
 		return errPermanent{err}
 	}
-	// Only once dest is truncated: the new version's state over the old bytes
-	// would have the next run resume onto them.
 	if resp.StatusCode == http.StatusOK {
 		st = fetchState{URL: url, Validator: strongValidator(resp.Header)}
 		if err := writeState(dest, st); err != nil {
@@ -268,9 +228,9 @@ func (d *Downloader) fetchOnce(ctx context.Context, url, dest, sha256Hex string)
 	if _, err := io.Copy(f, body); err != nil {
 		f.Close()
 		if ctx.Err() == nil && actx.Err() != nil {
-			return fmt.Errorf("downloading %s: no data received for %v", url, d.IdleTimeout) // resume next time
+			return fmt.Errorf("downloading %s: no data received for %v", url, d.IdleTimeout)
 		}
-		return fmt.Errorf("downloading %s: %w", url, err) // transient: resume next time
+		return fmt.Errorf("downloading %s: %w", url, err)
 	}
 	if err := f.Close(); err != nil {
 		return errPermanent{err}
@@ -282,17 +242,12 @@ func (d *Downloader) fetchOnce(ctx context.Context, url, dest, sha256Hex string)
 	return verifyChecksum(dest, sha256Hex)
 }
 
-// parseContentRangeStart extracts START from "bytes START-END/TOTAL". The
-// caller requires START to equal its own offset, so a loose parse cannot
-// splice bytes.
 func parseContentRangeStart(h string) (int64, bool) {
 	var start int64
 	n, err := fmt.Sscanf(h, "bytes %d-", &start)
 	return start, err == nil && n == 1
 }
 
-// parseContentRangeTotal extracts TOTAL from "bytes */TOTAL" or
-// "bytes START-END/TOTAL".
 func parseContentRangeTotal(h string) (int64, bool) {
 	_, total, ok := strings.Cut(h, "/")
 	if !ok || !strings.HasPrefix(h, "bytes ") {
@@ -318,7 +273,6 @@ func verifyChecksum(path, want string) error {
 	}
 	got := hex.EncodeToString(h.Sum(nil))
 	if !strings.EqualFold(got, want) {
-		// Removed so a retry starts clean rather than resuming onto bad bytes.
 		os.Remove(path)
 		os.Remove(statePath(path))
 		return errPermanent{fmt.Errorf("checksum mismatch for %s: want %s, got %s", path, want, got)}
@@ -326,9 +280,6 @@ func verifyChecksum(path, want string) error {
 	return nil
 }
 
-// Reachable reports whether url answers within the attempt budget; used to
-// decide whether replication can be configured at all. Failures are logged so
-// an unreachable URL is distinguishable from a typo.
 func (d *Downloader) Reachable(ctx context.Context, url string, attempts int, delay time.Duration) bool {
 	for i := 0; i < attempts; i++ {
 		if i > 0 {

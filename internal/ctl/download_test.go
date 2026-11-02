@@ -17,7 +17,7 @@ import (
 
 func testDownloader() *Downloader {
 	d := NewDownloader("test-agent")
-	d.Backoff = time.Millisecond // keep the retry tests fast
+	d.Backoff = time.Millisecond
 	return d
 }
 
@@ -46,7 +46,6 @@ func TestFetchWritesFileAndVerifiesChecksum(t *testing.T) {
 	}
 }
 
-// A wrong checksum must not leave the bad file behind for a later run to use.
 func TestFetchChecksumMismatchRemovesFileAndDoesNotRetry(t *testing.T) {
 	var hits int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -68,7 +67,6 @@ func TestFetchChecksumMismatchRemovesFileAndDoesNotRetry(t *testing.T) {
 	}
 }
 
-// A mid-transfer failure on a multi-GB planet file must not discard the work.
 func TestFetchRetriesTransientFailure(t *testing.T) {
 	body := []byte("0123456789abcdefghij")
 	var hits int32
@@ -107,7 +105,6 @@ func TestFetchDoesNotRetryNotFound(t *testing.T) {
 	}
 }
 
-// Resume must append only when the server confirms the offset we asked for.
 func TestFetchResumesFromPartialFile(t *testing.T) {
 	body := []byte("0123456789abcdefghij")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -133,13 +130,10 @@ func TestFetchResumesFromPartialFile(t *testing.T) {
 	}
 }
 
-// A stale partial from a different URL previously got appended to, producing a
-// file that is neither download.
 func TestFetchRestartsOnContentRangeMismatch(t *testing.T) {
 	body := []byte("0123456789abcdefghij")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Range") != "" {
-			// Lie: claim a different starting offset than the client asked for.
 			w.Header().Set("Content-Range", fmt.Sprintf("bytes 3-%d/%d", len(body)-1, len(body)))
 			w.WriteHeader(http.StatusPartialContent)
 			w.Write(body[3:])
@@ -165,8 +159,6 @@ func TestFetchRestartsOnContentRangeMismatch(t *testing.T) {
 	}
 }
 
-// A server that ignores Range must not have its full response appended to the
-// partial file.
 func TestFetchHandlesServerIgnoringRange(t *testing.T) {
 	body := []byte("0123456789abcdefghij")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -191,16 +183,13 @@ func TestFetchHandlesServerIgnoringRange(t *testing.T) {
 	}
 }
 
-// A partial left by another URL, or by an older upstream version, must be
-// downloaded again from scratch, never appended to.
 func TestFetchDoesNotResumeForeignPartial(t *testing.T) {
 	body := []byte("0123456789abcdefghij")
 	for name, st := range map[string]func(url string) fetchState{
 		"other URL":       func(string) fetchState { return fetchState{URL: "https://example.invalid/other.pbf"} },
 		"no record":       func(string) fetchState { return fetchState{} },
 		"changed version": func(url string) fetchState { return fetchState{URL: url, Validator: `"v0"`} },
-		// Without a validator no If-Range is sent, so the server would splice.
-		"no validator": func(url string) fetchState { return fetchState{URL: url} },
+		"no validator":    func(url string) fetchState { return fetchState{URL: url} },
 	} {
 		t.Run(name, func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -228,8 +217,6 @@ func TestFetchDoesNotResumeForeignPartial(t *testing.T) {
 	}
 }
 
-// The new version's state is written only once dest is truncated for it: a
-// failure in between must leave the old bytes under the old state.
 func TestFetchRecordsNewStateOnlyAfterTruncating(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("ETag", `"v1"`)
@@ -237,7 +224,6 @@ func TestFetchRecordsNewStateOnlyAfterTruncating(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	// A directory cannot be opened for writing: the open fails.
 	dest := filepath.Join(t.TempDir(), "f.gz")
 	if err := os.Mkdir(dest, 0o755); err != nil {
 		t.Fatal(err)
@@ -254,7 +240,6 @@ func TestFetchRecordsNewStateOnlyAfterTruncating(t *testing.T) {
 	}
 }
 
-// A completed download of the same URL is reused, not fetched again.
 func TestFetchReusesCompletedDownload(t *testing.T) {
 	var hits int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -278,8 +263,6 @@ func TestFetchReusesCompletedDownload(t *testing.T) {
 	}
 }
 
-// A dataset path that is a symlink (from an earlier IMPORT_X=/path run) must be
-// replaced, not written through into the file it points at.
 func TestFetchReplacesSymlink(t *testing.T) {
 	body := []byte("downloaded")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -307,8 +290,6 @@ func TestFetchReplacesSymlink(t *testing.T) {
 	}
 }
 
-// A connection that stops sending body bytes must be abandoned and resumed,
-// not waited on forever.
 func TestFetchAbandonsStalledBody(t *testing.T) {
 	body := []byte("0123456789abcdefghij")
 	var hits int32
@@ -317,7 +298,7 @@ func TestFetchAbandonsStalledBody(t *testing.T) {
 			w.Header().Set("ETag", `"v1"`)
 			w.Write(body[:5])
 			w.(http.Flusher).Flush()
-			<-r.Context().Done() // stall with the connection open
+			<-r.Context().Done()
 			return
 		}
 		w.Header().Set("ETag", `"v1"`)
@@ -336,8 +317,6 @@ func TestFetchAbandonsStalledBody(t *testing.T) {
 	}
 }
 
-// A partial of exactly the remote length (killed before its completion was
-// recorded) is finished, not a reason to download a planet again.
 func TestFetchAcceptsFullLengthPartial(t *testing.T) {
 	body := []byte("0123456789abcdefghij")
 	var full int32
@@ -368,8 +347,6 @@ func TestFetchAcceptsFullLengthPartial(t *testing.T) {
 	}
 }
 
-// A completed file that no longer matches the (updated) checksum is fetched
-// again in the same run rather than failing the import.
 func TestFetchRefetchesCompletedFileOnChecksumChange(t *testing.T) {
 	body := []byte("republished")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

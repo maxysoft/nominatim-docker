@@ -11,37 +11,25 @@ import (
 	"time"
 )
 
-// nominatimUser is the unprivileged account created in the Dockerfile.
 const nominatimUser = "nominatim"
 
-// Runner launches child processes as an unprivileged user via a direct
-// fork+setuid, so the image needs no setuid binary and can run under
-// no-new-privileges.
 type Runner struct {
 	UID, GID int
 	Dir      string
 	Env      []string
-	// Grace is how long a child may drain after SIGTERM before it is killed
-	// (Config.ShutdownGrace).
-	Grace time.Duration
+	Grace    time.Duration
 }
 
-// Command builds a child process that will run as r.UID/r.GID.
 func (r *Runner) Command(ctx context.Context, name string, args ...string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = r.Dir
 	cmd.Env = r.Env
-	// Child output goes through the secret masker too; Run flushes after exit.
 	cmd.Stdout = &RedactWriter{W: os.Stdout}
 	cmd.Stderr = &RedactWriter{W: os.Stderr}
-	// SIGTERM first so Gunicorn drains and an import is not cut mid-transaction;
-	// WaitDelay escalates to SIGKILL.
 	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
 	cmd.WaitDelay = r.Grace
-	// Only meaningful, and only permitted, when running as root. The empty
-	// Groups list makes Go call setgroups, so the child does not keep root's
-	// supplementary groups (gid 0, compose group_add).
 	if os.Geteuid() == 0 && r.UID != 0 {
+		// Keep the empty Groups below: it makes Go call setgroups and drop root's supplementary groups (gid 0, group_add).
 		cmd.SysProcAttr = &syscall.SysProcAttr{
 			Credential: &syscall.Credential{
 				Uid:    uint32(r.UID),
@@ -53,7 +41,6 @@ func (r *Runner) Command(ctx context.Context, name string, args ...string) *exec
 	return cmd
 }
 
-// Run executes a command to completion, returning a wrapped error on failure.
 func (r *Runner) Run(ctx context.Context, name string, args ...string) error {
 	Logf("+ %s %v", name, args)
 	cmd := r.Command(ctx, name, args...)
@@ -66,24 +53,18 @@ func (r *Runner) Run(ctx context.Context, name string, args ...string) error {
 	return nil
 }
 
-// WithEnv returns a copy of the runner with extra environment entries
-// appended; later entries win.
 func (r *Runner) WithEnv(extra ...string) *Runner {
 	c := *r
 	c.Env = append(append([]string{}, r.Env...), extra...)
 	return &c
 }
 
-// HaveImportTools reports whether osm2pgsql is installed. The slim serve image
-// ships without it, and with it goes the ability to import or replicate.
 func HaveImportTools() bool {
 	_, err := exec.LookPath("osm2pgsql")
 	return err == nil
 }
 
-// WarnIfNoInit notes that orphan reaping is delegated to the container
-// runtime: a Wait4(-1) reaper would race exec.Cmd.Wait for our own children
-// and turn successful imports into intermittent ECHILD failures.
+// Never add a Wait4(-1) reaper: it races exec.Cmd.Wait and fails imports with ECHILD.
 func WarnIfNoInit() {
 	if os.Getpid() == 1 {
 		Logf("note: running as PID 1 without an init. Orphaned processes will not be reaped; " +
@@ -91,11 +72,8 @@ func WarnIfNoInit() {
 	}
 }
 
-// LookupNominatimUser resolves the unprivileged account the workload runs as.
-// The UID is fixed at image build time so data volumes survive rebuilds.
 func LookupNominatimUser() (uid, gid int, err error) {
 	if os.Geteuid() != 0 {
-		// Already unprivileged: run everything as ourselves.
 		return os.Geteuid(), os.Getegid(), nil
 	}
 

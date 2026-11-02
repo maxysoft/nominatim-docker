@@ -13,8 +13,6 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// RunImport imports unconditionally (reimport); EnsureImported decides first.
-// It waits while another container imports into the same database.
 func RunImport(ctx context.Context, c *Config, r *Runner) error {
 	if err := checkImportable(c); err != nil {
 		return err
@@ -32,7 +30,6 @@ func RunImport(ctx context.Context, c *Config, r *Runner) error {
 	return runImport(ctx, c, r)
 }
 
-// checkImportable refuses before any download or provisioning happens.
 func checkImportable(c *Config) error {
 	if err := c.ValidateForImport(); err != nil {
 		return err
@@ -44,8 +41,6 @@ func checkImportable(c *Config) error {
 	return nil
 }
 
-// runImport performs the one-time database provisioning and OSM import. The
-// caller has run checkImportable and holds the import lock.
 func runImport(ctx context.Context, c *Config, r *Runner) error {
 	dl := NewDownloader(c.UserAgent)
 
@@ -85,8 +80,6 @@ func runImport(ctx context.Context, c *Config, r *Runner) error {
 		}
 	}
 
-	// The import can leave parent places flagged for indexing, which would
-	// make --check-database report unindexed entries.
 	if err := r.Run(ctx, "nominatim", "index", "--threads", fmt.Sprint(c.Threads), "--project-dir", c.ProjectDir); err != nil {
 		return err
 	}
@@ -104,9 +97,6 @@ func runImport(ctx context.Context, c *Config, r *Runner) error {
 	return finishImport(ctx, c, c.LibpqURL("nominatim", c.NominatimPassword, c.PostgresDB))
 }
 
-// finishImport gathers planner statistics, records completion and removes the
-// downloads; shared by a fresh import and an adopted one. COMMENT ON DATABASE
-// needs ownership, so the caller chooses which role url connects as.
 func finishImport(ctx context.Context, c *Config, url string) error {
 	Logf("gathering planner statistics")
 	conn, err := pgx.Connect(ctx, url)
@@ -117,8 +107,6 @@ func finishImport(ctx context.Context, c *Config, url string) error {
 	if _, err := conn.Exec(ctx, "ANALYZE"); err != nil {
 		return err
 	}
-	// Recorded only after full success. An interrupted run leaves tables but
-	// no marker, so the next start validates them before anything else.
 	if err := markImportComplete(ctx, conn, c.PostgresDB); err != nil {
 		return err
 	}
@@ -127,17 +115,12 @@ func finishImport(ctx context.Context, c *Config, url string) error {
 	return nil
 }
 
-// fetchDatasets resolves the optional supplementary datasets. Nominatim's
-// import reads them from the project directory by name, so a disabled one
-// must not leave a file of ours there.
 func fetchDatasets(ctx context.Context, c *Config, dl *Downloader) error {
 	for _, d := range Datasets {
 		v := c.DatasetValues[d.EnvVar]
 		dest := filepath.Join(c.ProjectDir, d.Local)
 		switch {
 		case v == "true":
-			// An operator file there: Fetch would truncate it, and a checksum
-			// mismatch delete it.
 			if isOperatorFile(dest) {
 				return operatorFileError(d, dest)
 			}
@@ -147,11 +130,10 @@ func fetchDatasets(ctx context.Context, c *Config, dl *Downloader) error {
 				return fmt.Errorf("%s: %w", d.Label, err)
 			}
 		case v != "" && v != "false":
-			// Absolute-path form, already validated. The operator's own file at
-			// dest is used in place: replacing it would delete it.
 			if isSameRegularFile(v, dest) {
 				Logf("using %s from %s", d.Label, v)
-				_ = os.Remove(statePath(dest)) // the operator's now: never cleaned up
+				// Drop our state file, or cleanupDownloads would delete the operator's file.
+				_ = os.Remove(statePath(dest))
 				continue
 			}
 			Logf("linking %s from %s", d.Label, v)
@@ -170,7 +152,6 @@ func fetchDatasets(ctx context.Context, c *Config, dl *Downloader) error {
 			if err != nil {
 				return fmt.Errorf("%s: %w", d.Label, err)
 			}
-			// Tiger is the exception: only runImport's add-data reads it.
 			if kept && d.EnvVar != "IMPORT_TIGER_ADDRESSES" {
 				Logf("WARNING: %s is not set, but %s exists; Nominatim imports it anyway", d.EnvVar, dest)
 				continue
@@ -181,8 +162,6 @@ func fetchDatasets(ctx context.Context, c *Config, dl *Downloader) error {
 	return nil
 }
 
-// isSameRegularFile reports whether dest is a regular file (not a symlink of
-// ours) that path names too.
 func isSameRegularFile(path, dest string) bool {
 	pi, err := os.Stat(path)
 	if err != nil {
@@ -192,8 +171,6 @@ func isSameRegularFile(path, dest string) bool {
 	return err == nil && di.Mode().IsRegular() && os.SameFile(pi, di)
 }
 
-// isOperatorFile reports whether path exists and is not ours: neither a
-// symlink nor a download with its state file.
 func isOperatorFile(path string) bool {
 	fi, err := os.Lstat(path)
 	if err != nil || fi.Mode()&os.ModeSymlink != 0 {
@@ -208,8 +185,6 @@ func operatorFileError(d Dataset, dest string) error {
 		d.Label, dest, d.EnvVar, dest)
 }
 
-// removeLeftover deletes what an earlier run left at path: a symlink, or a
-// download with its state file. An operator file is kept, which it reports.
 func removeLeftover(path string) (kept bool, err error) {
 	if isOperatorFile(path) {
 		return true, nil
@@ -222,8 +197,6 @@ func removeLeftover(path string) (kept bool, err error) {
 	return false, nil
 }
 
-// provisionDatabase creates the roles and clears any stale database using the
-// administrative credentials. The application role is not a superuser.
 func provisionDatabase(ctx context.Context, c *Config) error {
 	adminURL := c.LibpqURL(adminUser, c.AdminPassword, "postgres")
 	Logf("waiting for PostgreSQL at %s:%d", c.PostgresHost, c.PostgresPort)
@@ -231,8 +204,6 @@ func provisionDatabase(ctx context.Context, c *Config) error {
 		return err
 	}
 
-	// Bounded probe: a server that accepts TCP but stalls the handshake must
-	// not block here without a diagnostic.
 	probeCtx, cancelProbe := context.WithTimeout(ctx, 15*time.Second)
 	defer cancelProbe()
 	hasData, err := databaseHasTables(probeCtx, c.LibpqURL(adminUser, c.AdminPassword, c.PostgresDB))
@@ -240,8 +211,6 @@ func provisionDatabase(ctx context.Context, c *Config) error {
 		if !c.AllowDropExistingDB {
 			return fmt.Errorf("cannot inspect database %q, refusing to drop it: %w", c.PostgresDB, err)
 		}
-		// The drop is allowed either way, and this is the only way out for a
-		// database left invalid by an interrupted DROP (PostgreSQL 16+).
 		Logf("cannot inspect database %q (%v); treating it as populated", c.PostgresDB, err)
 		hasData = true
 	}
@@ -260,15 +229,13 @@ func provisionDatabase(ctx context.Context, c *Config) error {
 		return err
 	}
 
-	// A superuser role installs its own extensions; nothing to pre-seed then.
 	if c.ProvisionExtensions && !roleIsSuperuser(c.RoleOptions) {
 		tmpl, err := pgx.Connect(ctx, c.LibpqURL(adminUser, c.AdminPassword, "template1"))
 		if err != nil {
 			return err
 		}
 		err = provisionExtensions(ctx, tmpl)
-		// Closed here, not deferred: the import's CREATE DATABASE ... TEMPLATE
-		// template1 fails while a session is still attached to template1.
+		// Not deferred: CREATE DATABASE ... TEMPLATE template1 fails while this session is still attached.
 		tmpl.Close(ctx)
 		if err != nil {
 			return fmt.Errorf("installing PostGIS into template1 (set PROVISION_EXTENSIONS=false if your "+
@@ -278,20 +245,15 @@ func provisionDatabase(ctx context.Context, c *Config) error {
 	return nil
 }
 
-// roleIsSuperuser reports whether NOMINATIM_ROLE_OPTIONS grants SUPERUSER. A
-// substring test would also match NOSUPERUSER.
 func roleIsSuperuser(options string) bool {
 	return slices.ContainsFunc(strings.Fields(options), func(o string) bool { return strings.EqualFold(o, "SUPERUSER") })
 }
 
-// configureReplicationOrFreeze runs the post-import replication/freeze branch.
 func configureReplicationOrFreeze(ctx context.Context, c *Config, r *Runner, dl *Downloader) error {
 	if c.ReplicationURL != "" {
 		if c.Freeze {
 			Logf("skipping freeze because REPLICATION_URL is set")
 		}
-		// A passing outage must not turn replication off for good: serve and
-		// the updater run --init again on every start.
 		if !dl.Reachable(ctx, c.ReplicationURL, 3, 2*time.Second) {
 			Logf("WARNING: REPLICATION_URL unreachable; skipping replication --init for now")
 			return nil
@@ -305,7 +267,6 @@ func configureReplicationOrFreeze(ctx context.Context, c *Config, r *Runner, dl 
 	return nil
 }
 
-// warmCaches runs the warm-up pass under relaxed timeouts.
 func warmCaches(ctx context.Context, c *Config, r *Runner) error {
 	args := []string{"admin", "--warm", "--project-dir", c.ProjectDir}
 	if c.ReverseOnly {
@@ -315,8 +276,6 @@ func warmCaches(ctx context.Context, c *Config, r *Runner) error {
 	return warm.Run(ctx, "nominatim", args...)
 }
 
-// cleanupDownloads removes exactly the files the import created, never a
-// glob, and never a dataset file the operator placed in the project directory.
 func cleanupDownloads(c *Config) {
 	Logf("removing downloaded dumps in %s", c.ProjectDir)
 	for _, d := range Datasets {
@@ -328,8 +287,6 @@ func cleanupDownloads(c *Config) {
 	}
 }
 
-// chownProjectFiles gives the unprivileged user the paths it must write,
-// without recursing over operator data mounted under the project directory.
 func chownProjectFiles(c *Config, uid, gid int) error {
 	if os.Geteuid() != 0 {
 		return nil

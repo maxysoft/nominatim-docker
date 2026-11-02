@@ -3,7 +3,6 @@ name: CI
 on:
   push:
   pull_request:
-  # Weekly rebuild and republish, so Debian security fixes reach :latest and :serve.
   schedule:
     - cron: '23 0 * * 1'
   workflow_dispatch:
@@ -13,8 +12,7 @@ permissions:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  # Only pull requests: cancelling a push run could stop publish between
-  # its registry pushes and leave the tags inconsistent.
+  # Only pull requests: cancelling a push run mid-publish leaves the registry tags inconsistent.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -23,16 +21,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # The Makefile holds the digest-pinned golang, hadolint and shellcheck
-      # images, so CI and local runs cannot drift apart.
       - run: make vet test fmt-check lint
 
   build:
     name: Build docker image
-    # Requires the bracketed marker. A bare `skip_build` matches anywhere in the
-    # message, including the body, so a commit that merely mentions the flag
-    # silently skips the whole matrix, and the run still reports green, because
-    # skipped jobs do not fail. That hid a broken CI from 2026-04-22 onwards.
     if: ${{ !contains(github.event.head_commit.message, '[skip_build]') }}
 
     runs-on: ubuntu-latest
@@ -55,15 +47,10 @@ jobs:
           context: .
           tags: nominatim:${{ steps.get_version.outputs.NOMINATIM_VERSION }}
           outputs: type=docker,dest=/tmp/nominatim.tar
-          # Cached apt layers never pick up Debian security fixes; publish reads the cache this writes.
           no-cache: ${{ github.event_name == 'schedule' }}
-          # Read back by publish, so the amd64 layers it pushes are the ones tested.
           cache-from: type=gha,scope=full
           cache-to: type=gha,scope=full,mode=max
 
-      # The slim serve target must at least keep building; its behaviour
-      # (refusing imports, serving an existing database read-only) is asserted
-      # by the integration job (test/integration.sh serve_image).
       - name: Build serve target
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
@@ -89,18 +76,14 @@ jobs:
       NOMINATIM_VERSION: ${{ needs.build.outputs.NOMINATIM_VERSION }}
       POSTGRES_PASSWORD: very_secure_password
 
-    # Each scenario runs on its own runner: start-postgres and run-nominatim
-    # use fixed names and port 8080, and nothing needs cleaning up.
     strategy:
       fail-fast: false
       matrix:
         test_scenario:
-          # Also covers a plain PBF_URL import followed by an update.
           - name: Import with persistent data and container restart
             commands: |-
               ./start-postgres
               
-              # get the data from four days ago to make sure there really are updates to apply
               four_days_ago=`date --date="4 days ago" +%y%m%d`
               ./run-nominatim \
                 -e PBF_URL=https://download.geofabrik.de/europe/monaco-${four_days_ago}.osm.pbf \
@@ -109,21 +92,16 @@ jobs:
               ./assert-json "http://localhost:8080/search.php?q=avenue%20pasteur"
               ./assert-json "http://localhost:8080/status.php?format=json"
               
-              # Stop and remove, so the second run can take the name; the
-              # nominatim-data volume carries the project dir over.
               docker stop nominatim
               docker wait nominatim
               docker rm nominatim
 
-              # Start nominatim again with same database
               ./run-nominatim \
                 -e PBF_URL=https://download.geofabrik.de/europe/monaco-${four_days_ago}.osm.pbf \
                 -e REPLICATION_URL=https://download.geofabrik.de/europe/monaco-updates/ &
 
               ./assert-json "http://localhost:8080/search.php?q=avenue%20pasteur"
-              # The second start must reuse the import, not run it again.
               ./wait-log "existing Nominatim import found"
-              # The image's .env holds the read-only web DSN; replication needs the owner.
               docker exec -i -u nominatim -e 'NOMINATIM_DATABASE_DSN=pgsql:host=postgres;port=5432;user=nominatim;password=very_secure_password;dbname=nominatim;sslmode=prefer' nominatim nominatim replication --project-dir /nominatim --once
               ./assert-json "http://localhost:8080/search.php?q=avenue%20pasteur"
 
@@ -131,7 +109,6 @@ jobs:
             commands: |-
               ./start-postgres
               
-              # get the data from four days ago to make sure there really are updates to apply
               four_days_ago=`date --date="4 days ago" +%y%m%d`
               ./run-nominatim \
                 -e PBF_URL=https://download.geofabrik.de/europe/monaco-${four_days_ago}.osm.pbf \
@@ -140,15 +117,12 @@ jobs:
 
               ./assert-json "http://localhost:8080/search.php?q=avenue%20pasteur"
               ./assert-json "http://localhost:8080/status.php?format=json"
-              # Replication output goes to the container's stdout now, not to an
-              # unrotated /var/log/replication.log inside the container.
               ./wait-log "Update completed."
 
           - name: UPDATE_MODE=continuous
             commands: |-
               ./start-postgres
               
-              # get the data from few days ago to make sure there really are updates to apply
               days_ago=`date --date="4 days ago" +%y%m%d`
               ./run-nominatim \
                 -e PBF_URL=https://download.geofabrik.de/europe/monaco-${days_ago}.osm.pbf \
@@ -157,8 +131,6 @@ jobs:
 
               ./assert-json "http://localhost:8080/search.php?q=avenue%20pasteur"
               ./assert-json "http://localhost:8080/status.php?format=json"
-              # Replication output goes to the container's stdout now, not to an
-              # unrotated /var/log/replication.log inside the container.
               ./wait-log "Update completed."
 
           - name: Import admin style
@@ -170,10 +142,8 @@ jobs:
                 -e REPLICATION_URL=https://download.geofabrik.de/europe/monaco-updates/ \
                 -e IMPORT_STYLE=admin &
 
-              # First the long-retry check, which covers the import itself.
               ./assert-json "http://localhost:8080/status.php?format=json"
               ./assert-json "http://localhost:8080/search.php?q=hotel%20de%20paris" --empty
-              # Admin style keeps boundaries, so search must still find them.
               ./assert-json "http://localhost:8080/search.php?q=Monaco&format=json&limit=1" "class" "^boundary$"
 
           - name: Import with PBF_PATH
@@ -210,8 +180,6 @@ jobs:
 
               ./assert-json "http://localhost:8080/search.php?postalcode=LE15+8TX"
               ./assert-json "http://localhost:8080/status.php?format=json"
-              # PE9 3SY was retired from the ONS dataset and is absent from the current
-              # gb_postcodes.csv.gz; PE9 3AL is the nearest surviving PE9 3* postcode.
               ./assert-json "http://localhost:8080/search.php?postalcode=PE9+3AL"
               ./assert-json "http://localhost:8080/search.php?postalcode=PE9+4ES"
 
@@ -227,7 +195,6 @@ jobs:
               ./assert-json "http://localhost:8080/reverse.php?lat=43.7314&lon=7.4197&format=jsonv2" "display_name" "Monaco"
               ./assert-json "http://localhost:8080/status.php?format=json"
 
-          # Also covers a blank REPLICATION_URL and the WARMUP_ON_STARTUP=false default.
           - name: Check for clean shutdown
             commands: |-
               ./start-postgres
@@ -238,9 +205,7 @@ jobs:
               ./assert-json "http://localhost:8080/search.php?q=avenue%20pasteur"
               ./assert-json "http://localhost:8080/status.php?format=json"
               ./wait-log "Skipping cache warmup"
-              # Shutdown the container
               docker stop -t 60 nominatim
-              # Verify that the exit code is zero
               CONTAINER_EXIT_CODE=$(docker inspect nominatim --format='{{.State.ExitCode}}')
               test "$CONTAINER_EXIT_CODE" -eq 0
 
@@ -256,7 +221,6 @@ jobs:
               ./assert-json "http://localhost:8080/status.php?format=json"
               ./wait-log "Warming finished"
 
-          # Also covers the default (full) import style and a volume-mounted project dir.
           - name: API endpoints coverage
             commands: |-
               ./start-postgres
@@ -265,50 +229,38 @@ jobs:
                 -e PBF_URL=https://download.geofabrik.de/europe/monaco-latest.osm.pbf \
                 -e REPLICATION_URL=https://download.geofabrik.de/europe/monaco-updates/ &
 
-              # /status endpoint: verify service is up, status=0, and version matches
               ./assert-json "http://localhost:8080/status.php?format=json"
               ./assert-json "http://localhost:8080/status.php?format=json" "status" "^0$"
               ./assert-json "http://localhost:8080/status.php?format=json" "software_version" "^5\."
               ./assert-json "http://localhost:8080/status.php?format=json" "database_version" "^5\."
 
-              # /search endpoint: verify avenue pasteur returns results
               ./assert-json "http://localhost:8080/search.php?q=avenue%20pasteur"
-              # the full style imports POIs; admin style asserts the opposite
               ./assert-json "http://localhost:8080/search.php?q=hotel%20de%20paris"
-              # verify Monaco country result has correct place_rank and class
               ./assert-json "http://localhost:8080/search.php?q=Monaco&format=json&limit=1" "name" "^Monaco$"
               ./assert-json "http://localhost:8080/search.php?q=Monaco&format=json&limit=1" "class" "^boundary$"
               ./assert-json "http://localhost:8080/search.php?q=Monaco&format=json&limit=1" "place_rank" "^4$"
-              # verify addressdetails returns country field
               ./assert-json "http://localhost:8080/search.php?q=avenue%20pasteur&format=json&limit=1&addressdetails=1" "address.country" "Monaco"
-              # verify polygon_geojson is returned
               ./assert-json "http://localhost:8080/search.php?q=Monaco&format=json&limit=1&polygon_geojson=1" "geojson.type" "olygon"
-              # verify structured query (city+country) returns results
               ./assert-json "http://localhost:8080/search.php?city=Monaco&country=Monaco&format=json" "place_id" "."
 
-              # /reverse endpoint: verify Palace of Monaco resolves to Monaco
               ./assert-json "http://localhost:8080/reverse.php?lat=43.734&lon=7.42&format=json"
               ./assert-json "http://localhost:8080/reverse.php?lat=43.7314&lon=7.4197&format=json" "display_name" "Monaco"
               ./assert-json "http://localhost:8080/reverse.php?lat=43.7314&lon=7.4197&format=json" "address.country" "Monaco"
 
-              # /lookup endpoint: verify OSM way and Monaco country relation
               ./assert-json "http://localhost:8080/lookup.php?osm_ids=W201009264&format=json"
               ./assert-json "http://localhost:8080/lookup.php?osm_ids=R1124039&format=json" "osm_type" "^relation$"
               ./assert-json "http://localhost:8080/lookup.php?osm_ids=R1124039&format=json" "name" "^Monaco$"
 
-              # /details endpoint: verify Monaco country via osmtype+osmid
               ./assert-json "http://localhost:8080/details.php?osmtype=R&osmid=1124039&format=json" "localname" "^Monaco$"
               ./assert-json "http://localhost:8080/details.php?osmtype=R&osmid=1124039&format=json" "category" "^boundary$"
 
-              # verify Content-Type: application/json header. GET, not HEAD:
-              # Nominatim answers HEAD with a 405 whose error body is JSON too.
+              # GET, not HEAD: Nominatim answers HEAD with a 405 whose error body is JSON too.
               CT=$(curl -s -o /dev/null -w '%{content_type}' "http://localhost:8080/search.php?q=Monaco&format=json")
               case "$CT" in
                 application/json*) echo "✅ Content-Type: $CT" ;;
                 *) echo "FAIL: Content-Type header: $CT"; exit 1 ;;
               esac
 
-              # Run database health check inside the container
               docker exec -u nominatim -e 'NOMINATIM_DATABASE_DSN=pgsql:host=postgres;port=5432;user=nominatim;password=very_secure_password;dbname=nominatim;sslmode=prefer' nominatim nominatim admin --check-database --project-dir /nominatim
     
     steps:
@@ -324,13 +276,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # Excute the test scenario
       - name: ${{ matrix.test_scenario.name }}
         working-directory: .github/workflows
         run: ${{ matrix.test_scenario.commands }}
   
-  # The serve image and the shipped split compose stack are covered only
-  # here; the script builds both targets itself.
   integration:
     name: Integration scenarios
     needs: build
@@ -346,9 +295,6 @@ jobs:
     name: Publish docker image
     needs: [static, test, integration]
     runs-on: ubuntu-latest
-    # master publishes the real tags; the test branch publishes the same
-    # images with a -test suffix for pre-merge validation.
-    # Schedules run only on the default branch, so they publish the master tags.
     if: (github.event_name == 'push' || github.event_name == 'schedule') && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/test')
     permissions:
       contents: read
@@ -363,21 +309,18 @@ jobs:
 
       - name: Get commit short reference
         id: get_commit
-        # A schedule has no head commit: its images are stamped with the build time.
         env:
           HEAD_COMMIT_TIME: ${{ github.event.head_commit.timestamp }}
         run: |
           echo "SHORT_SHA=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
           echo "CREATED=${HEAD_COMMIT_TIME:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}" >> "$GITHUB_OUTPUT"
 
-      # OCI references must be lowercase; the repository name may not be.
       - name: Lowercase repository
         id: repo
         run: echo "REPO=${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
 
       - name: Compute tag suffix
         id: get_suffix
-        # -test on the test branch, empty on master.
         run: |
           if [ "$GITHUB_REF_NAME" = "test" ]; then
             echo "TAG_SUFFIX=-test" >> "$GITHUB_OUTPUT"
@@ -389,7 +332,6 @@ jobs:
         id: get_version
         run: echo "NOMINATIM_VERSION=$(grep -oP '(?<=ARG NOMINATIM_VERSION=)[0-9.]+' Dockerfile)" >> $GITHUB_OUTPUT
 
-      # Verify Dockerfile exists and get build info
       - name: Verify Dockerfile
         run: |
           test -f Dockerfile
@@ -411,10 +353,6 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # The weekly rebuild moves only the rolling tags: a commit tag keeps the image that commit was tested as.
-      # Each push reads the build job's cache: on a hit, the amd64 image
-      # pushed is layer for layer the one the tests ran. arm64 is built here
-      # and is not tested.
       - name: Build and push to Docker Hub
         if: ${{ github.repository_owner == 'maxysoft' }}
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0

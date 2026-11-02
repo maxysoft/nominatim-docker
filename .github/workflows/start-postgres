@@ -1,9 +1,4 @@
 #!/bin/sh
-# Starts the PostGIS container for a CI scenario and waits until it accepts
-# connections, on the network run-nominatim joins. No volume: no scenario
-# restarts PostgreSQL, so there is nothing to persist.
-#
-# Usage: start-postgres
 set -eu
 
 docker network create nominatim-net
@@ -14,7 +9,6 @@ docker run -d --rm --name postgres --network nominatim-net \
   -e POSTGRES_DB=nominatim \
   postgis/postgis:18-3.6-alpine@sha256:ffcf0c4b904e41b9779f8098007fb5a9484025319c18c70cf8e1bcebb742b9b7
 
-# Matches the docker-compose healthcheck cadence.
 for _ in $(seq 1 60); do
   if docker exec postgres pg_isready -U postgres >/dev/null 2>&1; then
     echo "PostgreSQL is ready"

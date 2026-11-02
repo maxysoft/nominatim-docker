@@ -1,5 +1,3 @@
-# Local integration stack. Driven by test/integration.sh, not meant for
-# production use. See contrib/ for deployment examples.
 name: nominatim-itest
 
 services:
@@ -46,13 +44,9 @@ services:
       - "127.0.0.1:${ITEST_PORT:-18080}:8080"
     volumes:
       - project:/nominatim
-    # The image ships no setuid binary, so this is safe to assert in the test.
-    # Reap orphaned processes; the entrypoint deliberately does not.
     init: true
     security_opt:
       - no-new-privileges:true
-    # Nothing outside /nominatim (volume), /tmp and $HOME (tmpfs below), and
-    # /dev/shm is ever written, so the root filesystem can be immutable.
     read_only: true
     tmpfs:
       - /tmp

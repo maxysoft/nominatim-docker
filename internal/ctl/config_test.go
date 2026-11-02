@@ -48,8 +48,6 @@ func TestLoadDefaults(t *testing.T) {
 	}
 }
 
-// A password with no default is the whole point: the previous image shipped one
-// baked into the Dockerfile and used it as a PostgreSQL superuser password.
 func TestPasswordIsRequired(t *testing.T) {
 	withEnv(t, baseEnv())
 	t.Setenv("NOMINATIM_PASSWORD", "")
@@ -91,8 +89,6 @@ func TestPBFMutualExclusion(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Load: %v", err)
 			}
-			// Load itself succeeds: a restart of an already-imported database
-			// must not require the original PBF settings.
 			if err := c.ValidateForImport(); err == nil {
 				t.Fatal("expected ValidateForImport to reject the combination")
 			}
@@ -100,7 +96,6 @@ func TestPBFMutualExclusion(t *testing.T) {
 	}
 }
 
-// The admin password must never be inferred from the application password.
 func TestAdminPasswordNotDerived(t *testing.T) {
 	withEnv(t, baseEnv())
 	t.Setenv("POSTGRES_ADMIN_PASSWORD", "")
@@ -136,14 +131,12 @@ func TestReplicationIntervalRequiresURL(t *testing.T) {
 
 func TestInvalidUpdateModeRejected(t *testing.T) {
 	withEnv(t, baseEnv())
-	t.Setenv("UPDATE_MODE", "contineous") // realistic typo
+	t.Setenv("UPDATE_MODE", "contineous")
 	if _, err := Load(); err == nil {
 		t.Fatal("expected an unknown UPDATE_MODE to be rejected")
 	}
 }
 
-// The shell version silently skipped a relative or misspelled dataset value,
-// producing an import quietly missing its importance data.
 func TestDatasetPathMustBeAbsoluteAndExist(t *testing.T) {
 	withEnv(t, baseEnv())
 	t.Setenv("IMPORT_WIKIPEDIA", "data/wiki.csv.gz")
@@ -206,9 +199,6 @@ func TestInvalidSSLModeRejected(t *testing.T) {
 	}
 }
 
-// Parsed by pgx itself, not net/url: pgx follows libpq, which ends the
-// userinfo at the first '@' and keeps '+' literal. A mis-escaped password is
-// set correctly on the role and then fails every subsequent login.
 func TestLibpqURLSurvivesSpecialCharactersInPassword(t *testing.T) {
 	withEnv(t, baseEnv())
 	c, err := Load()
@@ -232,7 +222,6 @@ func TestLibpqURLSurvivesSpecialCharactersInPassword(t *testing.T) {
 	}
 }
 
-// Both characters are field separators in Nominatim's own pgsql: DSN parser.
 func TestPasswordRejectsDSNMetacharacters(t *testing.T) {
 	for _, pw := range []string{"pass;word", "pass=word"} {
 		withEnv(t, baseEnv())
@@ -243,7 +232,6 @@ func TestPasswordRejectsDSNMetacharacters(t *testing.T) {
 	}
 }
 
-// A separate web-role password is what actually separates the privileges.
 func TestWebUserPasswordDefaultsButCanDiffer(t *testing.T) {
 	withEnv(t, baseEnv())
 	c, err := Load()
@@ -295,9 +283,6 @@ func testConfig() *Config {
 	}
 }
 
-// The old sed-based templating consumed its __PLACEHOLDER__ tokens on the first
-// run, so on a persisted volume every later start silently ignored the
-// environment. Regenerating must be stable and must track configuration change.
 func TestRenderEnvFileIsIdempotent(t *testing.T) {
 	c := testConfig()
 	first := RenderEnvFile(c)
@@ -329,8 +314,6 @@ func TestRenderEnvFileTracksConfigChanges(t *testing.T) {
 	}
 }
 
-// The shell version appended this line with >> on every start, growing the file
-// without bound on a restart loop.
 func TestTigerLineAppearsAtMostOnce(t *testing.T) {
 	c := testConfig()
 	c.DatasetValues["IMPORT_TIGER_ADDRESSES"] = "true"
@@ -345,8 +328,6 @@ func TestTigerLineAppearsAtMostOnce(t *testing.T) {
 	}
 }
 
-// An unset replication URL previously left the literal __REPLICATION_URL__
-// placeholder in the live configuration.
 func TestNoPlaceholdersLeak(t *testing.T) {
 	out := RenderEnvFile(testConfig())
 	if strings.Contains(out, "__") {
@@ -357,8 +338,6 @@ func TestNoPlaceholdersLeak(t *testing.T) {
 	}
 }
 
-// A second render with a different interval must fully replace the first, not
-// splice into it the way the unanchored sed did (86400 -> 864000 -> "3000").
 func TestIntervalIsReplacedNotSpliced(t *testing.T) {
 	c := testConfig()
 	c.ReplicationUpdateInterval = 864000
@@ -374,8 +353,6 @@ func TestIntervalIsReplacedNotSpliced(t *testing.T) {
 	}
 }
 
-// .env sits in a directory the workload user can write to, and is rewritten
-// as root on every start: a symlink there must be replaced, never followed.
 func TestWriteEnvFileReplacesSymlink(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "victim")
@@ -398,7 +375,6 @@ func TestWriteEnvFileReplacesSymlink(t *testing.T) {
 	}
 }
 
-// An IPv6 literal must be bracketed, or the URL does not parse at all.
 func TestLibpqURLBracketsIPv6(t *testing.T) {
 	c := &Config{PostgresHost: "fd00::5", PostgresPort: 5432, PostgresSSLMode: "prefer"}
 	u, err := url.Parse(c.LibpqURL("nominatim", "pw", "nominatim"))
@@ -410,8 +386,6 @@ func TestLibpqURLBracketsIPv6(t *testing.T) {
 	}
 }
 
-// .env is readable by the uid the API runs as, in both images, so it must not
-// hold the owning role's password.
 func TestRenderEnvFileUsesWebRole(t *testing.T) {
 	withEnv(t, baseEnv())
 	t.Setenv("NOMINATIM_WEBUSER_PASSWORD", "web-password-1")
@@ -425,8 +399,6 @@ func TestRenderEnvFileUsesWebRole(t *testing.T) {
 	}
 }
 
-// Both reach Gunicorn's command line: a non-number there killed it after
-// "ready" was logged. The graceful one also drives the SIGKILL deadline.
 func TestGunicornTimeouts(t *testing.T) {
 	withEnv(t, baseEnv())
 	c, err := Load()
@@ -452,9 +424,6 @@ func TestGunicornTimeouts(t *testing.T) {
 	}
 }
 
-// verifyChecksum matches hex digits in either case and nothing else. A pasted
-// `sha256sum` line used to fail only after the whole download, which the
-// restart policy then repeated forever.
 func TestChecksumMustBeHexDigest(t *testing.T) {
 	sum := strings.Repeat("0a", 32)
 	for _, tc := range []struct {

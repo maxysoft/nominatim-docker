@@ -18,16 +18,10 @@ import (
 	"github.com/xdg-go/stringprep"
 )
 
-// roleMarker tags the roles this image manages, so a pre-existing "www-data"
-// or "nominatim" on a shared server is never silently hijacked.
 const roleMarker = "managed by nominatim-docker"
 
-// importMarker is written as a COMMENT ON DATABASE only after an import has
-// fully succeeded; public.placex alone is created too early to be a signal.
 const importMarker = "nominatim-docker: import complete"
 
-// waitForDatabase polls until a connection succeeds or the attempt budget is
-// exhausted, then reports the real driver error.
 func waitForDatabase(ctx context.Context, url string, attempts int, delay time.Duration) error {
 	var last error
 	for i := 0; i < attempts; i++ {
@@ -45,12 +39,9 @@ func waitForDatabase(ctx context.Context, url string, attempts int, delay time.D
 			conn.Close(ctx)
 			return nil
 		}
-		// A rejected password is final; retrying only delays the same error.
 		if isAuthError(err) {
 			return fmt.Errorf("PostgreSQL rejected the credentials: %w", err)
 		}
-		// So is a missing database: the server answered, and the caller
-		// decides what absence means.
 		if isMissingDatabase(err) {
 			return fmt.Errorf("PostgreSQL is reachable but the database is missing: %w", err)
 		}
@@ -62,27 +53,19 @@ func waitForDatabase(ctx context.Context, url string, attempts int, delay time.D
 	return fmt.Errorf("PostgreSQL not reachable after %d attempts: %w", attempts, last)
 }
 
-// isAuthError reports SQLSTATE class 28 (invalid authorization). Startup (57P03)
-// and refused connections keep retrying.
 func isAuthError(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && strings.HasPrefix(pgErr.Code, "28")
 }
 
-// isMissingDatabase reports SQLSTATE 3D000 (invalid_catalog_name): the
-// database does not exist. It is the only connect error that proves a
-// database holds nothing; every other one leaves its contents unknown.
 func isMissingDatabase(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "3D000"
 }
 
-// databaseHasTables connects to url and reports whether its database holds
-// any tables. A database that does not exist holds none. Any other failure is
-// returned, never read as "empty": that reading once let a transient error end
-// in DROP DATABASE on a finished import.
 func databaseHasTables(ctx context.Context, url string) (bool, error) {
 	conn, err := pgx.Connect(ctx, url)
+	// Only 3D000 proves the database empty: reading any other error as empty once ended in DROP DATABASE.
 	if isMissingDatabase(err) {
 		return false, nil
 	}
@@ -95,11 +78,6 @@ func databaseHasTables(ctx context.Context, url string) (bool, error) {
 	return present, err
 }
 
-// readImportMarker connects to url and reports whether dbname carries the
-// completion marker. The marker lives in pg_database, so a connection to the
-// maintenance database works even where pg_hba keeps the admin out of dbname.
-// A database left invalid by an interrupted DROP (datconnlimit -2, PostgreSQL
-// 16+) can keep its comment, so it never counts as complete.
 func readImportMarker(ctx context.Context, url, dbname string) (bool, error) {
 	conn, err := pgx.Connect(ctx, url)
 	if err != nil {
@@ -119,15 +97,9 @@ func readImportMarker(ctx context.Context, url, dbname string) (bool, error) {
 	return comment != nil && *comment == importMarker, nil
 }
 
-// importLockClass namespaces the import lock among advisory locks;
-// test/integration.sh takes the same lock by value.
+// test/integration.sh takes the same lock by this value; change both together.
 const importLockClass = 1313820489
 
-// lockImport serialises the decide-and-import span for dbname across
-// containers with a session-level advisory lock, waiting while another holds
-// it; unlock releases it. url must reach the maintenance database: advisory
-// locks are per database, and dbname gets dropped. Polled rather than
-// pg_advisory_lock: a cancelled wait would leave the server backend queued.
 // ponytail: the lock lives only as long as this connection, so one that dies
 // mid-import (server restart, idle reaper) frees it early; re-take it before
 // DROP DATABASE if that ever matters.
@@ -136,6 +108,7 @@ func lockImport(ctx context.Context, url, dbname string) (unlock func(), err err
 	if err != nil {
 		return nil, fmt.Errorf("taking the import lock: %w", err)
 	}
+	// Polled, not pg_advisory_lock: a cancelled blocking wait would leave the server backend queued.
 	for i := 0; ; i++ {
 		var got bool
 		if err := conn.QueryRow(ctx, "SELECT pg_try_advisory_lock($1, hashtext($2))", importLockClass, dbname).Scan(&got); err != nil {
@@ -157,9 +130,6 @@ func lockImport(ctx context.Context, url, dbname string) (unlock func(), err err
 	}
 }
 
-// ensureRole creates role if it is absent, and reconciles its password and
-// attributes. A role without our marker comment belongs to someone else, so
-// we stop rather than reset its password.
 func ensureRole(ctx context.Context, conn *pgx.Conn, role, password string, extraOptions string) error {
 	if err := mustNotBeEmpty("role name", role); err != nil {
 		return err
@@ -182,13 +152,11 @@ func ensureRole(ctx context.Context, conn *pgx.Conn, role, password string, extr
 		if extraOptions != "" {
 			stmt += " " + extraOptions
 		}
-		// One transaction: a role created without its marker would be refused
-		// as foreign on every later start.
 		tx, err := conn.Begin(ctx)
 		if err != nil {
 			return fmt.Errorf("creating role %q: %w", role, err)
 		}
-		defer tx.Rollback(ctx) // no-op after Commit
+		defer tx.Rollback(ctx)
 		if _, err := tx.Exec(ctx, stmt); err != nil {
 			return fmt.Errorf("creating role %q: %w", role, err)
 		}
@@ -211,12 +179,9 @@ func ensureRole(ctx context.Context, conn *pgx.Conn, role, password string, extr
 			"refusing to change its password. Drop it, or comment it with %q to adopt it", role, roleMarker)
 	}
 
-	// Keep the password in step with the environment so rotation takes effect.
 	if _, err := conn.Exec(ctx, fmt.Sprintf("ALTER ROLE %s PASSWORD %s", ident, secret)); err != nil {
 		return fmt.Errorf("updating password for role %q: %w", role, err)
 	}
-	// Reconcile attributes too, or NOMINATIM_ROLE_OPTIONS would only apply on
-	// the run that created the role.
 	opts := reconcileRoleOptions(extraOptions, super)
 	if opts != extraOptions {
 		Logf("revoking SUPERUSER from role %s: its options no longer grant it", role)
@@ -229,9 +194,6 @@ func ensureRole(ctx context.Context, conn *pgx.Conn, role, password string, extr
 	return nil
 }
 
-// reconcileRoleOptions adds NOSUPERUSER when a role is a superuser that the
-// options no longer make one, so dropping SUPERUSER from NOMINATIM_ROLE_OPTIONS
-// takes effect. Only then: NOSUPERUSER itself needs superuser to issue.
 func reconcileRoleOptions(options string, isSuper bool) string {
 	if !isSuper || roleIsSuperuser(options) ||
 		slices.ContainsFunc(strings.Fields(options), func(o string) bool { return strings.EqualFold(o, "NOSUPERUSER") }) {
@@ -240,29 +202,22 @@ func reconcileRoleOptions(options string, isSuper bool) string {
 	return strings.TrimSpace("NOSUPERUSER " + options)
 }
 
-// reconcileRoles creates or updates the application and web roles at url, so a
-// rotated password takes effect on the next start.
 func reconcileRoles(ctx context.Context, c *Config, url string) error {
 	conn, err := pgx.Connect(ctx, url)
 	if err != nil {
 		return err
 	}
 	defer conn.Close(ctx)
-	// CREATEDB is all the import needs once PostGIS is pre-installed.
 	if err := ensureRole(ctx, conn, "nominatim", c.NominatimPassword, c.RoleOptions); err != nil {
 		return err
 	}
-	// The same role twice would have its options reconciled away by the
-	// second, option-less call (SUPERUSER revoked).
+	// Calling ensureRole twice for one role would let the option-less call revoke SUPERUSER.
 	if c.WebUser == "nominatim" {
 		return nil
 	}
 	return ensureRole(ctx, conn, c.WebUser, c.WebUserPassword, "")
 }
 
-// databaseState reports whether dbname is frozen, by Nominatim's own test (the
-// place table is gone after `nominatim freeze`), and whether the application
-// role owns it (an adopted database may belong to someone else).
 func databaseState(ctx context.Context, url, dbname string) (frozen, ownedByApp bool, err error) {
 	conn, err := pgx.Connect(ctx, url)
 	if err != nil {
@@ -278,10 +233,6 @@ func databaseState(ctx context.Context, url, dbname string) (frozen, ownedByApp 
 	return frozen, ownedByApp, nil
 }
 
-// userTablesSQL finds any relation that is not a system catalog and not owned
-// by an extension (PostGIS's spatial_ref_sys comes from template1). Checking
-// only public.placex would let a non-Nominatim database on a shared server be
-// dropped without ALLOW_DROP_EXISTING_DB.
 const userTablesSQL = `SELECT EXISTS (
 	SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
 	WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f')
@@ -290,8 +241,6 @@ const userTablesSQL = `SELECT EXISTS (
 	  AND NOT EXISTS (SELECT 1 FROM pg_depend d
 	                  WHERE d.classid = 'pg_class'::regclass AND d.objid = c.oid AND d.deptype = 'e'))`
 
-// dropDatabase removes dbname, refusing to touch a populated database unless
-// the operator explicitly opted in.
 func dropDatabase(ctx context.Context, conn *pgx.Conn, dbname string, hasData, allowed bool) error {
 	if err := mustNotBeEmpty("POSTGRES_DB", dbname); err != nil {
 		return err
@@ -303,10 +252,9 @@ func dropDatabase(ctx context.Context, conn *pgx.Conn, dbname string, hasData, a
 	if hasData {
 		Logf("WARNING: ALLOW_DROP_EXISTING_DB=true, dropping populated database %q", dbname)
 	}
-	// FORCE terminates connections left by a previous container; PostgreSQL 13+.
-	// Cast on the server: SHOW yields text, which pgx will not scan into an int.
 	force := false
 	var verNum int
+	// Keep the ::int cast: pgx will not scan text into an int, and this error is ignored, so FORCE would silently stop.
 	if err := conn.QueryRow(ctx, "SELECT current_setting('server_version_num')::int").Scan(&verNum); err == nil && verNum >= 130000 {
 		force = true
 	}
@@ -316,8 +264,6 @@ func dropDatabase(ctx context.Context, conn *pgx.Conn, dbname string, hasData, a
 	return nil
 }
 
-// dropDatabaseSQL builds the DROP statement; split out so the quoting and the
-// FORCE selection are testable without a server.
 func dropDatabaseSQL(dbname string, force bool) string {
 	stmt := "DROP DATABASE IF EXISTS " + QuoteIdentifier(dbname)
 	if force {
@@ -326,12 +272,7 @@ func dropDatabaseSQL(dbname string, force bool) string {
 	return stmt
 }
 
-// provisionExtensions installs the extensions Nominatim requires into the
-// connected database (template1): PostGIS is untrusted, so CREATE EXTENSION
-// needs superuser, and template1 is the only way to hand the extensions to an
-// unprivileged role, because Nominatim's own createdb fails on an existing database.
 func provisionExtensions(ctx context.Context, conn *pgx.Conn) error {
-	// Must match what nominatim_db's setup_database_skeleton creates.
 	var missing []string
 	for _, ext := range []string{"hstore", "postgis", "postgis_raster"} {
 		var present bool
@@ -358,8 +299,6 @@ func provisionExtensions(ctx context.Context, conn *pgx.Conn) error {
 	return nil
 }
 
-// markImportComplete records that the import finished. Requires ownership of
-// the database, which the application role has.
 func markImportComplete(ctx context.Context, conn *pgx.Conn, dbname string) error {
 	_, err := conn.Exec(ctx, fmt.Sprintf("COMMENT ON DATABASE %s IS %s",
 		QuoteIdentifier(dbname), QuoteLiteral(importMarker)))
@@ -369,26 +308,18 @@ func markImportComplete(ctx context.Context, conn *pgx.Conn, dbname string) erro
 	return nil
 }
 
-// QuoteLiteral renders s as a PostgreSQL string literal. CREATE/ALTER ROLE
-// ... PASSWORD cannot take a bind parameter, and an unescaped quote would let
-// the remainder execute as SQL.
 func QuoteLiteral(s string) string {
 	escaped := strings.ReplaceAll(s, `'`, `''`)
 	if strings.Contains(s, `\`) {
-		// E'' strings treat backslash as an escape, so double it.
 		return "E'" + strings.ReplaceAll(escaped, `\`, `\\`) + "'"
 	}
 	return "'" + escaped + "'"
 }
 
-// QuoteIdentifier renders s as a PostgreSQL quoted identifier; quoting also
-// stops POSTGRES_DB=MyDB from case-folding to a different database.
 func QuoteIdentifier(s string) string {
 	return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
 }
 
-// mustNotBeEmpty guards identifiers where an empty value would produce valid
-// but catastrophic SQL (e.g. DROP DATABASE "").
 func mustNotBeEmpty(field, value string) error {
 	if strings.TrimSpace(value) == "" {
 		return fmt.Errorf("%s must not be empty", field)
@@ -396,12 +327,8 @@ func mustNotBeEmpty(field, value string) error {
 	return nil
 }
 
-// scramIterations is PostgreSQL's own default for password_encryption.
 const scramIterations = 4096
 
-// scramVerifier builds the value PostgreSQL stores in pg_authid.rolpassword,
-// so the cleartext password never reaches the server, where log_statement
-// would record it verbatim. Format per RFC 5802 with PostgreSQL's encoding.
 func scramVerifier(password string, salt []byte, iterations int) (string, error) {
 	saltedPassword, err := pbkdf2.Key(sha256.New, password, salt, iterations, sha256.Size)
 	if err != nil {
@@ -421,9 +348,6 @@ func scramVerifier(password string, salt []byte, iterations int) (string, error)
 		iterations, b64(salt), b64(storedKey[:]), b64(serverKey)), nil
 }
 
-// saslprep normalises a password the way PostgreSQL does before hashing:
-// RFC 4013, falling back to the raw bytes when preparation fails
-// (mirroring pg_saslprep), so non-ASCII passwords verify too.
 func saslprep(password string) string {
 	prepped, err := stringprep.SASLprep.Prepare(password)
 	if err != nil {
@@ -432,8 +356,6 @@ func saslprep(password string) string {
 	return prepped
 }
 
-// passwordSecret renders the value for a CREATE/ALTER ROLE ... PASSWORD
-// clause; the cleartext never appears in it.
 func passwordSecret(password string) (sql string, err error) {
 	salt := make([]byte, 16)
 	if _, err := rand.Read(salt); err != nil {

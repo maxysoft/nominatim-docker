@@ -10,8 +10,6 @@ import (
 	"testing"
 )
 
-// IMPORT_X=true over a file the operator placed at dest must neither truncate
-// it nor, on a checksum mismatch, delete it.
 func TestFetchDatasetsRefusesDownloadOverOperatorFile(t *testing.T) {
 	var hits int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -37,9 +35,6 @@ func TestFetchDatasetsRefusesDownloadOverOperatorFile(t *testing.T) {
 	}
 }
 
-// A dataset the operator placed where Nominatim looks for it is used in
-// place: deleting it and linking dest to itself made the import skip it. After
-// the import, only downloads and symlinks are removed.
 func TestDatasetsKeepOperatorFileInProjectDir(t *testing.T) {
 	dir := t.TempDir()
 	wiki := filepath.Join(dir, Datasets[0].Local)
@@ -83,8 +78,6 @@ func TestDatasetsKeepOperatorFileInProjectDir(t *testing.T) {
 	}
 }
 
-// With a dataset unset, what an earlier failed run left must go before the
-// import, or Nominatim imports it anyway; a file of the operator's stays.
 func TestFetchDatasetsRemovesOnlyOwnLeftovers(t *testing.T) {
 	dir := t.TempDir()
 	path := func(i int) string { return filepath.Join(dir, Datasets[i].Local) }
