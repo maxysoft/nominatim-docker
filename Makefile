@@ -4,8 +4,8 @@
 # recompiles the world.
 
 # The digest pins live once, in the Dockerfile.
-GO_IMAGE   ?= $(shell sed -n 's/^ARG GO_IMAGE=//p' Dockerfile)
-BASE_IMAGE ?= $(shell sed -n 's/^ARG BASE_IMAGE=//p' Dockerfile)
+GO_IMAGE   ?= $(shell sed -n 's/^FROM \(.*\) AS go-build$$/\1/p' Dockerfile)
+BASE_IMAGE ?= $(shell sed -n 's/^FROM \(.*\) AS base$$/\1/p' Dockerfile)
 UID        := $(shell id -u)
 GID        := $(shell id -g)
 

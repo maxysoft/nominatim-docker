@@ -154,10 +154,14 @@ scenario_full() {
     bad "Content-Type is not application/json (got: $ct)"
   fi
 
-  if $COMPOSE exec -T -u nominatim nominatim nominatim admin --check-database --project-dir /nominatim >/dev/null 2>&1; then
+  local check
+  # shellcheck disable=SC2016
+  if check=$($COMPOSE exec -T -u nominatim nominatim sh -c \
+    'NOMINATIM_DATABASE_DSN="pgsql:host=$POSTGRES_HOST;dbname=$POSTGRES_DB;user=nominatim;password=$NOMINATIM_PASSWORD" exec nominatim admin --check-database --project-dir /nominatim' 2>&1); then
     ok "nominatim admin --check-database succeeds"
   else
     bad "nominatim admin --check-database failed"
+    printf '%s\n' "$check" | tail -n 15
   fi
 }
 
@@ -276,6 +280,25 @@ scenario_restart() {
     ok "restart skipped the import"
   else
     bad "restart did not report skipping the import"
+  fi
+
+  # A valid import without the marker (pg_restore into a fresh database) is
+  # validated and adopted even under ALLOW_DROP_EXISTING_DB, never dropped.
+  $COMPOSE exec -T postgres psql -U postgres -qc "COMMENT ON DATABASE nominatim IS NULL" >/dev/null
+  local out rc marker
+  set +e
+  out=$($COMPOSE run --rm --no-deps -T -e ALLOW_DROP_EXISTING_DB=true nominatim import 2>&1)
+  rc=$?
+  set -e
+  marker=$($COMPOSE exec -T postgres psql -U postgres -tAc \
+    "SELECT shobj_description(oid, 'pg_database') FROM pg_database WHERE datname='nominatim'" 2>/dev/null || true)
+  after=$($COMPOSE exec -T postgres psql -U postgres -d nominatim -tAc \
+    "SELECT count(*) FROM placex" 2>/dev/null | tr -d '[:space:]' || true)
+  if [[ $rc -eq 0 && $marker == 'nominatim-docker: import complete' && $after == "$before" ]] &&
+      grep -q 'adopting the existing import' <<<"$out"; then
+    ok "unstamped import adopted, not dropped, under ALLOW_DROP_EXISTING_DB"
+  else
+    bad "unstamped import not adopted (rc=$rc, marker=$marker, placex $before -> $after): ${out: -300}"
   fi
 }
 
@@ -493,6 +516,45 @@ scenario_drop_guard() {
   else
     bad "its data is gone"
   fi
+
+  # A nominatim role that cannot connect makes validation impossible, which
+  # must never read as "invalid", even with ALLOW_DROP_EXISTING_DB.
+  pg -c "REVOKE CONNECT ON DATABASE guarded FROM PUBLIC" >/dev/null
+  set +e
+  out=$(timeout 300 docker run --rm --network nominatim-itest_default \
+        -e POSTGRES_HOST=postgres -e POSTGRES_DB=guarded -e POSTGRES_SSLMODE=disable -e ALLOW_DROP_EXISTING_DB=true \
+        -e NOMINATIM_PASSWORD=itest-nominatim-password -e POSTGRES_ADMIN_PASSWORD=itest-admin-password \
+        -e PBF_URL=https://example.invalid/a.pbf "$IMAGE" serve 2>&1)
+  rc=$?
+  set -e
+  if [[ $rc -ne 0 && $rc -ne 124 ]] && grep -q 'nominatim role cannot connect' <<<"$out" &&
+      [[ "$(pg -d guarded -c 'SELECT count(*) FROM precious' 2>/dev/null)" == 1 ]]; then
+    ok "unvalidatable database kept under ALLOW_DROP_EXISTING_DB"
+  else
+    bad "unvalidatable database not refused (rc=$rc): ${out: -300}"
+  fi
+
+  # While another session holds the import lock, a container waits and
+  # decides nothing. The key must match importLockClass in internal/ctl/db.go.
+  pg -c "SELECT pg_advisory_lock(1313820489, hashtext('guarded'))" -c "SELECT pg_sleep(30)" >/dev/null 2>&1 &
+  for _ in $(seq 20); do
+    [[ "$(pg -c "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND granted" 2>/dev/null)" == 1 ]] && break
+    sleep 1
+  done
+  set +e
+  out=$(timeout 15 docker run --rm --network nominatim-itest_default \
+        -e POSTGRES_HOST=postgres -e POSTGRES_DB=guarded -e POSTGRES_SSLMODE=disable \
+        -e NOMINATIM_PASSWORD=itest-nominatim-password -e POSTGRES_ADMIN_PASSWORD=itest-admin-password \
+        -e PBF_URL=https://example.invalid/a.pbf "$IMAGE" serve 2>&1)
+  rc=$?
+  set -e
+  if [[ $rc -eq 124 ]] && grep -q 'waiting for another import into' <<<"$out" &&
+      ! grep -q 'completion marker' <<<"$out"; then
+    ok "a second importer waits for the import lock"
+  else
+    bad "import lock not honoured (rc=$rc): ${out:0:300}"
+  fi
+  wait
 }
 
 # One-shot import on the full image, serve-only API without admin credentials,

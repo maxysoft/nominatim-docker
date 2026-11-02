@@ -10,6 +10,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // nominatimHome matches the account created in the Dockerfile.
@@ -150,9 +152,19 @@ func EnsureImported(ctx context.Context, c *Config, r *Runner) error {
 		return fmt.Errorf("%w\n(no POSTGRES_ADMIN_PASSWORD is set, so the database cannot be provisioned either)", err)
 	}
 
-	// settled finishes for a database confirmed ours. Roles are server-wide, so
-	// only then are they reconciled; failure is a warning (adopted roles lack
-	// our marker).
+	// Taken before the marker is read, so a container that waited sees the
+	// other's finished import. Without admin credentials nothing can be dropped
+	// or imported, and adopting is idempotent.
+	if haveAdmin {
+		unlock, err := lockImport(ctx, probeURL, c.PostgresDB)
+		if err != nil {
+			return err
+		}
+		defer unlock()
+	}
+
+	// settled finishes for a database confirmed ours. Failing to reconcile the
+	// roles is a warning (adopted roles lack our marker).
 	settled := func() error {
 		if haveAdmin {
 			if err := reconcileRoles(ctx, c, probeURL); err != nil {
@@ -190,20 +202,39 @@ func EnsureImported(ctx context.Context, c *Config, r *Runner) error {
 			return fmt.Errorf("cannot inspect database %q, refusing to import over it: %w\n"+
 				"Set ALLOW_DROP_EXISTING_DB=true (or run `nominatim-ctl reimport`) to discard it and import again", c.PostgresDB, err)
 		}
-		// The drop is allowed either way; the import below is the way out
-		// for a database left invalid by an interrupted DROP.
-		Logf("cannot inspect database %q (%v); ALLOW_DROP_EXISTING_DB=true, importing over it", c.PostgresDB, err)
+		// The drop is allowed, and the import below is the way out for a
+		// database left invalid by an interrupted DROP; validation decides.
+		Logf("cannot inspect database %q (%v); validating it", c.PostgresDB, err)
 		hasData = true
 	}
 
-	if hasData && !c.AllowDropExistingDB {
+	if hasData {
 		// Tables without a completion marker: an import that died part-way, a
-		// database imported elsewhere, or not Nominatim at all. Nominatim's
-		// validator decides which.
+		// restored or adopted import never stamped, or not Nominatim at all.
+		// Nominatim's validator decides which; only a failure may be dropped.
 		Logf("database %q holds tables but no completion marker; validating", c.PostgresDB)
-		if err := r.Run(ctx, "nominatim", "admin", "--check-database", "--project-dir", c.ProjectDir); err != nil {
+		// The validator connects as the nominatim role, which a restore onto a
+		// fresh server lacks and a rotated password locks out. A failed
+		// connection says nothing about the schema, so it never leads to a drop.
+		if haveAdmin {
+			if err := reconcileRoles(ctx, c, probeURL); err != nil {
+				Logf("WARNING: role passwords not reconciled: %v", err)
+			}
+		}
+		appConn, err := pgx.Connect(ictx, c.LibpqURL("nominatim", c.NominatimPassword, c.PostgresDB))
+		if err != nil {
+			return fmt.Errorf("cannot validate database %q: the nominatim role cannot connect to it: %w\n"+
+				"Nothing was dropped. Check NOMINATIM_PASSWORD, the role's CONNECT privilege on the database and pg_hba.conf", c.PostgresDB, err)
+		}
+		appConn.Close(ctx)
+		err = r.Run(ctx, "nominatim", "admin", "--check-database", "--project-dir", c.ProjectDir)
+		if err != nil && (!c.AllowDropExistingDB || ctx.Err() != nil) {
 			return fmt.Errorf("database %q contains an incomplete or invalid Nominatim schema: %w\n"+
 				"Set ALLOW_DROP_EXISTING_DB=true to discard it and import again", c.PostgresDB, err)
+		}
+		if err != nil {
+			Logf("WARNING: validation failed; ALLOW_DROP_EXISTING_DB=true, discarding %q and importing again", c.PostgresDB)
+			return importChecked(ctx, c, r)
 		}
 		Logf("validation passed; adopting the existing import")
 		// The steps a fresh import runs after its own check. The adopted
@@ -221,7 +252,15 @@ func EnsureImported(ctx context.Context, c *Config, r *Runner) error {
 	}
 
 	Logf("no completed Nominatim import in %q, running import", c.PostgresDB)
-	return RunImport(ctx, c, r)
+	return importChecked(ctx, c, r)
+}
+
+// importChecked runs the import for EnsureImported, which holds the lock.
+func importChecked(ctx context.Context, c *Config, r *Runner) error {
+	if err := checkImportable(c); err != nil {
+		return err
+	}
+	return runImport(ctx, c, r)
 }
 
 // replicationRetry is how often serve re-checks an unreachable REPLICATION_URL.
@@ -390,7 +429,7 @@ func runGunicorn(ctx context.Context, c *Config, r *Runner, stopReplication func
 		"--enable-stdio-inheritance",
 		// Bounded request handling: a slow or oversized client must not hold a
 		// worker forever, and workers recycle periodically.
-		"--timeout", envOr("GUNICORN_TIMEOUT", "60"),
+		"--timeout", fmt.Sprint(c.GunicornTimeout),
 		"--graceful-timeout", fmt.Sprint(c.GunicornGracefulTimeout),
 		"--keep-alive", "5",
 		"--limit-request-line", "8190",
@@ -401,8 +440,7 @@ func runGunicorn(ctx context.Context, c *Config, r *Runner, stopReplication func
 		"nominatim_api.server.falcon.server:run_wsgi()",
 	}
 
-	// The API only reads, so it runs as the read-only web role: a flaw in the
-	// request path cannot write to, or escalate on, the database.
+	// The API only reads, so it connects as the read-only web role.
 	api := r.WithEnv(
 		"NOMINATIM_DATABASE_DSN="+c.DSN(c.WebUser, c.WebUserPassword),
 		"NOMINATIM_QUERY_TIMEOUT="+envOr("NOMINATIM_QUERY_TIMEOUT", "10"),

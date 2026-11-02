@@ -13,18 +13,40 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// RunImport performs the one-time database provisioning and OSM import.
+// RunImport imports unconditionally (reimport); EnsureImported decides first.
+// It waits while another container imports into the same database.
 func RunImport(ctx context.Context, c *Config, r *Runner) error {
+	if err := checkImportable(c); err != nil {
+		return err
+	}
+	adminURL := c.LibpqURL(adminUser, c.AdminPassword, "postgres")
+	Logf("waiting for PostgreSQL at %s:%d", c.PostgresHost, c.PostgresPort)
+	if err := waitForDatabase(ctx, adminURL, 150, 2*time.Second); err != nil {
+		return err
+	}
+	unlock, err := lockImport(ctx, adminURL, c.PostgresDB)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	return runImport(ctx, c, r)
+}
+
+// checkImportable refuses before any download or provisioning happens.
+func checkImportable(c *Config) error {
 	if err := c.ValidateForImport(); err != nil {
 		return err
 	}
-
-	// Refused before any download or provisioning happens.
 	if !HaveImportTools() {
 		return errors.New("this is the serve-only image: osm2pgsql is not installed, so it cannot run an import.\n" +
 			"Run the import once with the full (non -serve) image against the same database, then start this one again")
 	}
+	return nil
+}
 
+// runImport performs the one-time database provisioning and OSM import. The
+// caller has run checkImportable and holds the import lock.
+func runImport(ctx context.Context, c *Config, r *Runner) error {
 	dl := NewDownloader(c.UserAgent)
 
 	if err := fetchDatasets(ctx, c, dl); err != nil {
@@ -55,8 +77,8 @@ func RunImport(ctx context.Context, c *Config, r *Runner) error {
 		return err
 	}
 
-	tiger := filepath.Join(c.ProjectDir, "tiger-nominatim-preprocessed.csv.tar.gz")
-	if _, err := os.Stat(tiger); err == nil {
+	if c.TigerEnabled() {
+		tiger := filepath.Join(c.ProjectDir, "tiger-nominatim-preprocessed.csv.tar.gz")
 		Logf("importing Tiger address data")
 		if err := r.Run(ctx, "nominatim", "add-data", "--tiger-data", tiger, "--project-dir", c.ProjectDir); err != nil {
 			return err
@@ -96,7 +118,7 @@ func finishImport(ctx context.Context, c *Config, url string) error {
 		return err
 	}
 	// Recorded only after full success. An interrupted run leaves tables but
-	// no marker, so the next start refuses until reimport or ALLOW_DROP_EXISTING_DB.
+	// no marker, so the next start validates them before anything else.
 	if err := markImportComplete(ctx, conn, c.PostgresDB); err != nil {
 		return err
 	}
@@ -105,31 +127,99 @@ func finishImport(ctx context.Context, c *Config, url string) error {
 	return nil
 }
 
-// fetchDatasets resolves the optional supplementary datasets.
+// fetchDatasets resolves the optional supplementary datasets. Nominatim's
+// import reads them from the project directory by name, so a disabled one
+// must not leave a file of ours there.
 func fetchDatasets(ctx context.Context, c *Config, dl *Downloader) error {
 	for _, d := range Datasets {
 		v := c.DatasetValues[d.EnvVar]
 		dest := filepath.Join(c.ProjectDir, d.Local)
 		switch {
 		case v == "true":
+			// An operator file there: Fetch would truncate it, and a checksum
+			// mismatch delete it.
+			if isOperatorFile(dest) {
+				return operatorFileError(d, dest)
+			}
 			url := c.MirrorBaseURL + "/" + d.Remote
 			Logf("downloading %s from %s", d.Label, url)
 			if err := dl.Fetch(ctx, url, dest, os.Getenv(d.EnvVar+"_SHA256")); err != nil {
 				return fmt.Errorf("%s: %w", d.Label, err)
 			}
 		case v != "" && v != "false":
-			// Absolute-path form, already validated. Remove first: a stale
-			// symlink from a failed import would die on "file exists".
+			// Absolute-path form, already validated. The operator's own file at
+			// dest is used in place: replacing it would delete it.
+			if isSameRegularFile(v, dest) {
+				Logf("using %s from %s", d.Label, v)
+				_ = os.Remove(statePath(dest)) // the operator's now: never cleaned up
+				continue
+			}
 			Logf("linking %s from %s", d.Label, v)
-			_ = os.Remove(dest)
+			kept, err := removeLeftover(dest)
+			if err != nil {
+				return fmt.Errorf("%s: %w", d.Label, err)
+			}
+			if kept {
+				return operatorFileError(d, dest)
+			}
 			if err := os.Symlink(v, dest); err != nil {
 				return fmt.Errorf("%s: %w", d.Label, err)
 			}
 		default:
+			kept, err := removeLeftover(dest)
+			if err != nil {
+				return fmt.Errorf("%s: %w", d.Label, err)
+			}
+			// Tiger is the exception: only runImport's add-data reads it.
+			if kept && d.EnvVar != "IMPORT_TIGER_ADDRESSES" {
+				Logf("WARNING: %s is not set, but %s exists; Nominatim imports it anyway", d.EnvVar, dest)
+				continue
+			}
 			Logf("skipping optional %s import", d.Label)
 		}
 	}
 	return nil
+}
+
+// isSameRegularFile reports whether dest is a regular file (not a symlink of
+// ours) that path names too.
+func isSameRegularFile(path, dest string) bool {
+	pi, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	di, err := os.Lstat(dest)
+	return err == nil && di.Mode().IsRegular() && os.SameFile(pi, di)
+}
+
+// isOperatorFile reports whether path exists and is not ours: neither a
+// symlink nor a download with its state file.
+func isOperatorFile(path string) bool {
+	fi, err := os.Lstat(path)
+	if err != nil || fi.Mode()&os.ModeSymlink != 0 {
+		return false
+	}
+	_, err = os.Lstat(statePath(path))
+	return err != nil
+}
+
+func operatorFileError(d Dataset, dest string) error {
+	return fmt.Errorf("%s: %s already holds a file this image did not create; move it away, or set %s=%s to use it in place",
+		d.Label, dest, d.EnvVar, dest)
+}
+
+// removeLeftover deletes what an earlier run left at path: a symlink, or a
+// download with its state file. An operator file is kept, which it reports.
+func removeLeftover(path string) (kept bool, err error) {
+	if isOperatorFile(path) {
+		return true, nil
+	}
+	for _, p := range []string{path, statePath(path)} {
+		if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return false, err
+		}
+	}
+	return false, nil
 }
 
 // provisionDatabase creates the roles and clears any stale database using the
@@ -226,12 +316,11 @@ func warmCaches(ctx context.Context, c *Config, r *Runner) error {
 }
 
 // cleanupDownloads removes exactly the files the import created, never a
-// glob, which could match operator files too.
+// glob, and never a dataset file the operator placed in the project directory.
 func cleanupDownloads(c *Config) {
 	Logf("removing downloaded dumps in %s", c.ProjectDir)
 	for _, d := range Datasets {
-		_ = os.Remove(filepath.Join(c.ProjectDir, d.Local))
-		_ = os.Remove(statePath(filepath.Join(c.ProjectDir, d.Local)))
+		_, _ = removeLeftover(filepath.Join(c.ProjectDir, d.Local))
 	}
 	if c.PBFURL != "" {
 		_ = os.Remove(c.OSMFile())

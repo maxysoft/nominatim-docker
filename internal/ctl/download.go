@@ -179,9 +179,11 @@ func (d *Downloader) fetchOnce(ctx context.Context, url, dest, sha256Hex string)
 		Logf("%v; downloading again", err)
 		st, statErr = fetchState{}, os.ErrNotExist
 	}
-	// Resume only our own partial of this URL; anything else starts over.
+	// Resume only our own partial of this URL and version; anything else
+	// starts over. Without a validator there is no If-Range, and a
+	// republished file would be spliced onto the partial.
 	var offset int64
-	if statErr == nil && st.URL == url && fi.Size() > 0 {
+	if statErr == nil && st.URL == url && st.Validator != "" && fi.Size() > 0 {
 		offset = fi.Size()
 	}
 
@@ -196,9 +198,7 @@ func (d *Downloader) fetchOnce(ctx context.Context, url, dest, sha256Hex string)
 	if offset > 0 {
 		req.Header.Set("Range", fmt.Sprintf("bytes=%d-", offset))
 		// Upstream republished the file since: the server sends it whole.
-		if st.Validator != "" {
-			req.Header.Set("If-Range", st.Validator)
-		}
+		req.Header.Set("If-Range", st.Validator)
 	}
 
 	resp, err := d.Client.Do(req)
@@ -211,10 +211,6 @@ func (d *Downloader) fetchOnce(ctx context.Context, url, dest, sha256Hex string)
 	switch resp.StatusCode {
 	case http.StatusOK:
 		flags |= os.O_TRUNC // new file, or the server ignored the range
-		st = fetchState{URL: url, Validator: strongValidator(resp.Header)}
-		if err := writeState(dest, st); err != nil {
-			return errPermanent{err}
-		}
 	case http.StatusPartialContent:
 		// Trust the range only if it starts where our file ends; a mismatched
 		// offset would splice unrelated bytes into the file.
@@ -232,7 +228,7 @@ func (d *Downloader) fetchOnce(ctx context.Context, url, dest, sha256Hex string)
 		// A partial of exactly the remote length is a finished download whose
 		// completion was never recorded (killed right after the last byte).
 		// Only with If-Range sent: that is what confirms the same version.
-		if total, ok := parseContentRangeTotal(resp.Header.Get("Content-Range")); ok && offset > 0 && st.Validator != "" && total == offset {
+		if total, ok := parseContentRangeTotal(resp.Header.Get("Content-Range")); ok && offset > 0 && total == offset {
 			st.Complete = true
 			if err := writeState(dest, st); err != nil {
 				return errPermanent{err}
@@ -256,6 +252,15 @@ func (d *Downloader) fetchOnce(ctx context.Context, url, dest, sha256Hex string)
 	f, err := os.OpenFile(dest, flags, 0o644)
 	if err != nil {
 		return errPermanent{err}
+	}
+	// Only once dest is truncated: the new version's state over the old bytes
+	// would have the next run resume onto them.
+	if resp.StatusCode == http.StatusOK {
+		st = fetchState{URL: url, Validator: strongValidator(resp.Header)}
+		if err := writeState(dest, st); err != nil {
+			f.Close()
+			return errPermanent{err}
+		}
 	}
 	timer := time.AfterFunc(d.IdleTimeout, cancel)
 	defer timer.Stop()

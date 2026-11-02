@@ -168,7 +168,17 @@ are in public git history and should be considered permanently burned.
 **C4: unguarded `DROP DATABASE`.** Now refuses to drop a database holding any
 tables of its own (extension-owned ones such as `spatial_ref_sys` aside) unless
 `ALLOW_DROP_EXISTING_DB=true`. A database that cannot be inspected is never
-treated as empty; only one that does not exist is.
+treated as empty; only one that does not exist is. With it set, an unmarked
+database is still validated first; only a failing one is dropped.
+Concurrency: a session advisory lock (class 1313820489, `hashtext(POSTGRES_DB)`)
+is held on an admin connection to `postgres` across decide, download, provision
+and import. It is polled every 5s, because a cancelled `pg_advisory_lock` leaves
+the backend queued; it is lost if that connection dies, does not hold through
+PgBouncer transaction pooling, and is skipped without admin credentials (nothing
+can be dropped then). Dataset files: an `IMPORT_X` naming the project-directory
+file itself is used in place; only downloads (file plus `.source` state) and
+symlinks are ever removed, and a disabled dataset loses such leftovers before the
+import. Downloads resume only with an ETag or Last-Modified to send as If-Range.
 
 **C5: SQL injection via `NOMINATIM_PASSWORD` and `POSTGRES_DB`.** A password
 containing `'` broke the statement; a crafted one executed as superuser. An
@@ -188,9 +198,13 @@ passwords, and child output (Gunicorn, osm2pgsql, Python tracebacks) is filtered
 line by line through the same masker; role passwords are set with a client-computed SCRAM-SHA-256 verifier
 rather than a cleartext `ALTER ROLE … PASSWORD`, so the password itself never
 reaches the server or its statement log; `.env` is chmod-ed to `0600` on every
-write, including one left at `0644` on a volume by an older image; the web role
-has its own `NOMINATIM_WEBUSER_PASSWORD` so leaking the API's DSN does not also
-hand over the `CREATEDB` role; every setuid and setgid bit in the image is stripped at build time,
+write, including one left at `0644` on a volume by an older image; `.env` is
+readable by the API's user, so in both images it holds only the web role's DSN,
+and the web role has its own `NOMINATIM_WEBUSER_PASSWORD`, so leaking the API's
+DSN does not also hand over the `CREATEDB` role (one gap remains: with
+`UPDATE_MODE` set on the single full-image container, the replication process
+runs as the same user with the owning role's DSN in its environment, so only the
+split deployment fully separates the API from the database owner); every setuid and setgid bit in the image is stripped at build time,
 which makes `no-new-privileges:true` meaningful; Python dependencies are pinned
 with hashes (`gunicorn>=25.0` was silently resolving to 26.0.0); GitHub Actions
 are pinned to commit SHAs and the workflow has a least-privilege
@@ -240,7 +254,11 @@ are pinned to commit SHAs and the workflow has a least-privilege
    `docker exec -u nominatim … nominatim …`. Already updated in `ci.yml` and
    `howto.md`.
 4. **`.env` is regenerated on every start.** Hand edits to
-   `$PROJECT_DIR/.env` will not survive. Use environment variables.
+   `$PROJECT_DIR/.env` will not survive. Use environment variables. It holds
+   the read-only `www-data` DSN, so a `docker exec` command that writes, or runs
+   `admin --check-database`, needs
+   `-e NOMINATIM_DATABASE_DSN=…` naming the `nominatim` role, and it must not be
+   bind-mounted (startup fails).
 5. **Import is detected from the database, not `import-finished`.** A container
    pointed at a populated database will skip the import even on a fresh volume.
    That is the fix for the data-loss path, but it does mean re-importing into
@@ -266,7 +284,7 @@ are pinned to commit SHAs and the workflow has a least-privilege
     (worker recycling, which bounds memory growth on a long-running planet
     instance), `--timeout 60`, `--graceful-timeout 30`, `--keep-alive 5` and
     request-size limits. `--worker-tmp-dir` moved from `/tmp` to `/dev/shm`.
-    `GUNICORN_BIND`, `GUNICORN_TIMEOUT` and `GUNICORN_GRACEFUL_TIMEOUT` are
+    `GUNICORN_BIND`, `GUNICORN_TIMEOUT` (`0` disables it) and `GUNICORN_GRACEFUL_TIMEOUT` are
     configurable; the rest are fixed, because no deployment has needed to change
     them and every knob is surface to maintain.
 12. **`template1` is modified on first import** unless `PROVISION_EXTENSIONS=false`

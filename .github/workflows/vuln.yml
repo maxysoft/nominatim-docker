@@ -1,7 +1,7 @@
 name: Vulnerability scan
 
 # Scheduled too: a dependency can become vulnerable without a commit here.
-# Kept out of ci.yml, whose schedule would run the whole matrix and publish.
+# Runs after ci.yml's weekly rebuild (Monday 00:23 UTC), so it scans the fresh :latest.
 on:
   push:
   pull_request:
@@ -12,6 +12,9 @@ on:
 permissions:
   contents: read
 
+env:
+  OSV_SCANNER: ghcr.io/google/osv-scanner:v2.7.0@sha256:4f3b7e2c64b9d38a5febc5a7e4a3dfef1d1362f726dea7a2ef4762b46469fcd0
+
 jobs:
   govulncheck:
     name: govulncheck
@@ -20,3 +23,34 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # The Makefile holds the pinned golang image and govulncheck version.
       - run: make vuln
+
+  lockfiles:
+    name: osv-scanner lockfiles
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Go reachability is the govulncheck job's: the scanner image has no Go toolchain new enough for go.mod.
+      - run: docker run --rm -v "$PWD:/src" -w /src "$OSV_SCANNER" scan source --no-call-analysis=go -L requirements.txt -L go.mod
+
+  image:
+    name: osv-scanner published image
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      # :serve is serve-base plus one binary; :latest holds every package it has.
+      - name: Scan :latest, fail on vulnerabilities with a fix available
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY,,}:latest"
+          docker pull -q "$image"
+          docker save "$image" -o "$RUNNER_TEMP/image.tar"
+          docker run --rm -v "$RUNNER_TEMP:/scan" "$OSV_SCANNER" scan image --archive --format json /scan/image.tar > "$RUNNER_TEMP/osv.json" || [ $? -eq 1 ]
+          # Debian patches its python3-* libraries under the upstream version, so PyPI fixes never apply there; their Debian:13 entries cover them.
+          jq -r '
+            .results[] | select((.source.path // "") | startswith("/usr/lib/python3/dist-packages/") | not)
+            | .packages[] | .package as $p | .vulnerabilities[]?
+            | [.affected[]? | select(.package.ecosystem == $p.ecosystem and .package.name == $p.name) | .ranges[]?.events[]? | .fixed // empty] as $f
+            | select($f | length > 0)
+            | "\($p.ecosystem) \($p.name) \($p.version) \(.id) fixed in \($f | join(","))"
+          ' "$RUNNER_TEMP/osv.json" | sort -u > "$RUNNER_TEMP/fixable.txt"
+          cat "$RUNNER_TEMP/fixable.txt"
+          test ! -s "$RUNNER_TEMP/fixable.txt"

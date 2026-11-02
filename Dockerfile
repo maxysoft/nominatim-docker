@@ -2,13 +2,6 @@
 ARG NOMINATIM_VERSION=5.3.2
 ARG USER_AGENT=maxysoft/nominatim-docker:${NOMINATIM_VERSION}
 
-# Pinned by digest so a mutated tag can never change the base image. Upgrade:
-# docker buildx imagetools inspect debian:<v>-slim. The Makefile reads both pins
-# from here.
-ARG BASE_IMAGE=debian:13.7-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a
-# Pinned by digest like the base image.
-ARG GO_IMAGE=golang:1.27.1-bookworm@sha256:69a7b9788769bec032d238959b61854e9ae87f57be9029ec04e9885fabf99195
-
 # Fixed IDs so a rebuilt image keeps working with existing data volumes.
 ARG NOMINATIM_UID=1000
 ARG NOMINATIM_GID=1000
@@ -17,7 +10,8 @@ ARG NOMINATIM_GID=1000
 # ---------------------------------------------------------------------------
 # Stage 1: the entrypoint binary.
 # ---------------------------------------------------------------------------
-FROM ${GO_IMAGE} AS go-build
+# Digest-pinned and bumped by Dependabot. The Makefile reads it with sed: keep it on one line ending in the stage name.
+FROM golang:1.27.3-bookworm@sha256:d9b6a1beb9474adc2a1ce842573639b44b2a0dd49b6669f51d3821baf9ec37c9 AS go-build
 
 WORKDIR /src
 COPY go.mod go.sum ./
@@ -36,7 +30,10 @@ RUN --mount=type=cache,target=/go/pkg/mod,sharing=locked \
 # ships no wheel, and compiling it under QEMU on the arm64 leg is why no
 # compiler is installed here at all.
 # ---------------------------------------------------------------------------
-FROM ${BASE_IMAGE} AS py-build
+# Pinned and read by the Makefile like go-build.
+FROM debian:13.7-slim@sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c1a84fa1debe0c24a7e0c3ec4 AS base
+
+FROM base AS py-build
 
 ENV DEBIAN_FRONTEND=noninteractive LANG=C.UTF-8
 
@@ -65,7 +62,7 @@ RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
 # binary, which the final stages copy as their last layer so a Go change never
 # re-runs an apt layer. osm2pgsql and psql live only in the full image.
 # ---------------------------------------------------------------------------
-FROM ${BASE_IMAGE} AS serve-base
+FROM base AS serve-base
 
 ARG NOMINATIM_VERSION
 ARG USER_AGENT

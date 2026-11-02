@@ -27,8 +27,12 @@ matrix: [docs/REFACTOR.md](docs/REFACTOR.md).
   is no longer listed). Roles the container did not create must be tagged
   `managed by nominatim-docker` first; see [docs/MIGRATION.md](docs/MIGRATION.md).
 - **Breaking:** `sudo` is gone (use `docker exec -u nominatim ...`); `.env` is regenerated on every
-  start, so hand edits are lost; dataset paths must be absolute; `UPDATE_MODE` and the replication
-  intervals are validated at startup; a crashed Gunicorn exits non-zero. Volumes written by the
+  start, so hand edits are lost, and it can no longer be bind-mounted. It holds the read-only web
+  role's DSN in both images, so `docker exec` commands that write (`replication --once`, admin tasks)
+  and `admin --check-database` need the owner DSN passed with `-e NOMINATIM_DATABASE_DSN=...` (see
+  howto.md). Dataset paths must
+  be absolute; `UPDATE_MODE`, the replication intervals, `GUNICORN_TIMEOUT` and every `*_SHA256`
+  (64 hex digits) are validated at startup; a crashed Gunicorn exits non-zero. Volumes written by the
   shell-era image are not repaired automatically: chown them once by hand.
 - **Added:** A `serve` build target, published as `serve` and `v<version>-<sha>-serve`: API only,
   without osm2pgsql or postgresql-client, and it refuses to import.
@@ -49,6 +53,10 @@ matrix: [docs/REFACTOR.md](docs/REFACTOR.md).
   were ignored after the first run.
 - **Changed:** The API connects as the read-only `www-data` role. A container holding
   `POSTGRES_ADMIN_PASSWORD` reconciles the role passwords, so a rotated password needs no re-import.
+- **Changed:** An `IMPORT_*` path naming the file inside the project directory is used in place.
+  Only files the entrypoint downloaded or linked are ever removed, and leftovers of a failed run are
+  removed before the import once their dataset is disabled. Interrupted downloads resume only when
+  the server sent an ETag or Last-Modified.
 - **Changed:** Supplementary datasets come over HTTPS from `nominatim.org` instead of `scp`.
   Downloads resume only a matching partial file, abandon a stalled body, and honour
   `HTTPS_PROXY`/`HTTP_PROXY`/`NO_PROXY`.
@@ -62,19 +70,25 @@ matrix: [docs/REFACTOR.md](docs/REFACTOR.md).
 - **Changed:** `THREADS` and `GUNICORN_WORKERS` default to the container's CPU allowance (cgroup
   quota, at least 2). The compose files size them to PostgreSQL's `max_connections`, and replication
   honours `THREADS`.
-- **Changed:** Base image `debian:13.7-slim`, entrypoint built with Go 1.27.1 (refreshed image
+- **Changed:** Base image `debian:13.7-slim`, entrypoint built with Go 1.27.3 (refreshed image
   digest), `postgis/postgis:18-3.6-alpine` pins refreshed; all pinned by digest. PyICU comes from
   Debian's `python3-icu`, so the build installs no compiler.
 - **Changed:** pgx v5.11.0 (security fixes; passwords containing `@` and other reserved characters
   are now encoded so libpq-style parsing reads them correctly) and golang.org/x/text v0.42.0;
   golang.org/x/crypto is no longer a dependency.
 - **Changed:** Python dependencies refreshed, still hash-pinned: gunicorn 26.2.0, urllib3 2.8.0,
-  psycopg 3.3.6 and minor bumps.
+  psycopg 3.3.6, certifi 2026.10.23 (drops the compromised emSign root,
+  PYSEC-2026-4320) and minor bumps.
 - **Changed:** The Varnish example runs `varnish:9.0.4` (Debian image); 8.0 is EOL and affected by
   VSV00020. It also sets `IMPORT_WIKIPEDIA: "true"` and `THREADS: 4`; the planet example downloads
   `planet-latest`.
-- **Changed:** CI publishes only after the static checks, unit tests and integration scenarios
-  pass, runs `govulncheck` on a schedule, and pins every action by commit SHA with a least-privilege
+- **Changed:** CI publishes only after the static checks, unit tests and every integration scenario
+  pass. A weekly run rebuilds the images without the layer cache and republishes `latest` and
+  `serve`, so Debian security fixes land without a commit; `v<ver>-<sha>` tags keep the image that
+  commit was tested as. Dependabot updates action pins, Go modules, compose image digests and the
+  base and Go images, now pinned in literal `FROM` lines (the `BASE_IMAGE`/`GO_IMAGE` build args are
+  gone). CI runs `govulncheck` and osv-scanner (`requirements.txt`, `go.mod`, the published
+  `:latest` image) on a schedule, and pins every action by commit SHA with a least-privilege
   `permissions:` block. The CI matrix and the docs were simplified.
 - **Security:** Removed `sudo`, `sshpass` and `openssh-client`; setuid/setgid bits are stripped, so
   `no-new-privileges:true` is meaningful. Child processes drop root's supplementary groups and no
@@ -83,12 +97,18 @@ matrix: [docs/REFACTOR.md](docs/REFACTOR.md).
   are set with a client-computed SCRAM-SHA-256 verifier (SASLprep applied), so the cleartext never
   reaches the server log. Pre-existing roles without the managed tag are left alone.
 - **Security:** `DROP DATABASE` refuses a database holding tables of its own unless
-  `ALLOW_DROP_EXISTING_DB=true`, and a database that cannot be inspected never counts as empty.
+  `ALLOW_DROP_EXISTING_DB=true`, and even then only after `nominatim admin --check-database` fails
+  on it, so a valid restore without the marker is adopted. A database that cannot be inspected
+  never counts as empty. Imports into one database are serialised across containers by an advisory
+  lock.
 - **Security:** Secrets are masked in the entrypoint's logs and in child output, including passwords
   embedded in `PBF_URL`, `REPLICATION_URL` or `DATA_MIRROR_URL`. `.env` is written `0600` to a fresh
   file and renamed into place; the serve image's holds only the read-only role's DSN.
 - **Security:** Python dependencies are hash-pinned and the build no longer runs an unpinned
   `pip install --upgrade`.
+- **Fixed:** `contrib/postgres/planet-postgresql.conf` sets `maintenance_work_mem = 4GB` (was 20GB).
+  The import builds up to 8 indexes at once and each may use the full amount, which could run a
+  64 GB host out of memory at the last import stage.
 - **Fixed:** Varnish no longer caches 5xx responses and keys the cache on `Accept-Language`.
 - **Fixed:** `contrib/docker-compose-varnish.yml` lacked its top-level `networks:` block and pointed
   `POSTGRES_HOST` at a nonexistent service.

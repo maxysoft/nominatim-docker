@@ -153,7 +153,7 @@ func TestFetchRestartsOnContentRangeMismatch(t *testing.T) {
 	if err := os.WriteFile(dest, []byte("XXXXXXXX"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeState(dest, fetchState{URL: srv.URL}); err != nil {
+	if err := writeState(dest, fetchState{URL: srv.URL, Validator: `"v1"`}); err != nil {
 		t.Fatal(err)
 	}
 	if err := testDownloader().Fetch(context.Background(), srv.URL, dest, sha256Of(body)); err != nil {
@@ -179,7 +179,7 @@ func TestFetchHandlesServerIgnoringRange(t *testing.T) {
 	if err := os.WriteFile(dest, []byte("stale"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeState(dest, fetchState{URL: srv.URL}); err != nil {
+	if err := writeState(dest, fetchState{URL: srv.URL, Validator: `"v1"`}); err != nil {
 		t.Fatal(err)
 	}
 	if err := testDownloader().Fetch(context.Background(), srv.URL, dest, sha256Of(body)); err != nil {
@@ -199,6 +199,8 @@ func TestFetchDoesNotResumeForeignPartial(t *testing.T) {
 		"other URL":       func(string) fetchState { return fetchState{URL: "https://example.invalid/other.pbf"} },
 		"no record":       func(string) fetchState { return fetchState{} },
 		"changed version": func(url string) fetchState { return fetchState{URL: url, Validator: `"v0"`} },
+		// Without a validator no If-Range is sent, so the server would splice.
+		"no validator": func(url string) fetchState { return fetchState{URL: url} },
 	} {
 		t.Run(name, func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -223,6 +225,32 @@ func TestFetchDoesNotResumeForeignPartial(t *testing.T) {
 				t.Fatalf("content = %q, want a clean download of %q", got, body)
 			}
 		})
+	}
+}
+
+// The new version's state is written only once dest is truncated for it: a
+// failure in between must leave the old bytes under the old state.
+func TestFetchRecordsNewStateOnlyAfterTruncating(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("ETag", `"v1"`)
+		w.Write([]byte("new version"))
+	}))
+	defer srv.Close()
+
+	// A directory cannot be opened for writing: the open fails.
+	dest := filepath.Join(t.TempDir(), "f.gz")
+	if err := os.Mkdir(dest, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	old := fetchState{URL: srv.URL, Validator: `"v0"`}
+	if err := writeState(dest, old); err != nil {
+		t.Fatal(err)
+	}
+	if err := testDownloader().Fetch(context.Background(), srv.URL, dest, ""); err == nil {
+		t.Fatal("Fetch succeeded, want the open to fail")
+	}
+	if st := readState(dest); st != old {
+		t.Fatalf("state = %+v, want the old %+v", st, old)
 	}
 }
 

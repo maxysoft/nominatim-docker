@@ -16,7 +16,7 @@ Your PostgreSQL server should be configured with appropriate settings for Nomina
 
 Key settings to consider:
 - `shared_buffers`: At least 2GB (adjust based on available RAM)
-- `maintenance_work_mem`: At least 10GB for imports
+- `maintenance_work_mem`: 1-4GB for imports. Each parallel index build (up to 8 at once) can use all of it, so keep 8 x `maintenance_work_mem` + `shared_buffers` well below RAM
 - `work_mem`: 50MB or higher
 - `effective_cache_size`: 75% of available RAM
 - `checkpoint_timeout`: 10min during imports

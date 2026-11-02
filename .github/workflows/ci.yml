@@ -3,6 +3,9 @@ name: CI
 on:
   push:
   pull_request:
+  # Weekly rebuild and republish, so Debian security fixes reach :latest and :serve.
+  schedule:
+    - cron: '23 0 * * 1'
   workflow_dispatch:
 
 permissions:
@@ -52,6 +55,8 @@ jobs:
           context: .
           tags: nominatim:${{ steps.get_version.outputs.NOMINATIM_VERSION }}
           outputs: type=docker,dest=/tmp/nominatim.tar
+          # Cached apt layers never pick up Debian security fixes; publish reads the cache this writes.
+          no-cache: ${{ github.event_name == 'schedule' }}
           # Read back by publish, so the amd64 layers it pushes are the ones tested.
           cache-from: type=gha,scope=full
           cache-to: type=gha,scope=full,mode=max
@@ -65,6 +70,7 @@ jobs:
           context: .
           target: serve
           tags: nominatim:${{ steps.get_version.outputs.NOMINATIM_VERSION }}-serve
+          no-cache: ${{ github.event_name == 'schedule' }}
           cache-from: type=gha,scope=serve
           cache-to: type=gha,scope=serve,mode=max
 
@@ -117,7 +123,8 @@ jobs:
               ./assert-json "http://localhost:8080/search.php?q=avenue%20pasteur"
               # The second start must reuse the import, not run it again.
               ./wait-log "existing Nominatim import found"
-              docker exec -i -u nominatim nominatim nominatim replication --project-dir /nominatim --once
+              # The image's .env holds the read-only web DSN; replication needs the owner.
+              docker exec -i -u nominatim -e 'NOMINATIM_DATABASE_DSN=pgsql:host=postgres;port=5432;user=nominatim;password=very_secure_password;dbname=nominatim;sslmode=prefer' nominatim nominatim replication --project-dir /nominatim --once
               ./assert-json "http://localhost:8080/search.php?q=avenue%20pasteur"
 
           - name: UPDATE_MODE=once
@@ -302,7 +309,7 @@ jobs:
               esac
 
               # Run database health check inside the container
-              docker exec -u nominatim nominatim nominatim admin --check-database --project-dir /nominatim
+              docker exec -u nominatim -e 'NOMINATIM_DATABASE_DSN=pgsql:host=postgres;port=5432;user=nominatim;password=very_secure_password;dbname=nominatim;sslmode=prefer' nominatim nominatim admin --check-database --project-dir /nominatim
     
     steps:
       - name: Download artifact
@@ -332,8 +339,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Serve image and split stack
-        run: test/integration.sh serve_image split drop_guard
+      - name: All scenarios
+        run: test/integration.sh
 
   publish:
     name: Publish docker image
@@ -341,7 +348,8 @@ jobs:
     runs-on: ubuntu-latest
     # master publishes the real tags; the test branch publishes the same
     # images with a -test suffix for pre-merge validation.
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/test')
+    # Schedules run only on the default branch, so they publish the master tags.
+    if: (github.event_name == 'push' || github.event_name == 'schedule') && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/test')
     permissions:
       contents: read
       packages: write
@@ -355,7 +363,12 @@ jobs:
 
       - name: Get commit short reference
         id: get_commit
-        run: echo "SHORT_SHA=${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
+        # A schedule has no head commit: its images are stamped with the build time.
+        env:
+          HEAD_COMMIT_TIME: ${{ github.event.head_commit.timestamp }}
+        run: |
+          echo "SHORT_SHA=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          echo "CREATED=${HEAD_COMMIT_TIME:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}" >> "$GITHUB_OUTPUT"
 
       # OCI references must be lowercase; the repository name may not be.
       - name: Lowercase repository
@@ -398,6 +411,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # The weekly rebuild moves only the rolling tags: a commit tag keeps the image that commit was tested as.
       # Each push reads the build job's cache: on a hit, the amd64 image
       # pushed is layer for layer the one the tests ran. arm64 is built here
       # and is not tested.
@@ -412,12 +426,12 @@ jobs:
           sbom: true
           cache-from: type=gha,scope=full
           tags: |
-            ${{ steps.repo.outputs.REPO }}:v${{ steps.get_version.outputs.NOMINATIM_VERSION }}-${{ steps.get_commit.outputs.SHORT_SHA }}${{ steps.get_suffix.outputs.TAG_SUFFIX }}
+            ${{ github.event_name == 'push' && format('{0}:v{1}-{2}{3}', steps.repo.outputs.REPO, steps.get_version.outputs.NOMINATIM_VERSION, steps.get_commit.outputs.SHORT_SHA, steps.get_suffix.outputs.TAG_SUFFIX) || '' }}
             ${{ steps.repo.outputs.REPO }}:latest${{ steps.get_suffix.outputs.TAG_SUFFIX }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.created=${{ github.event.head_commit.timestamp }}
+            org.opencontainers.image.created=${{ steps.get_commit.outputs.CREATED }}
             org.opencontainers.image.version=${{ steps.get_version.outputs.NOMINATIM_VERSION }}
 
       - name: Build and push serve image to Docker Hub
@@ -432,12 +446,12 @@ jobs:
           sbom: true
           cache-from: type=gha,scope=serve
           tags: |
-            ${{ steps.repo.outputs.REPO }}:v${{ steps.get_version.outputs.NOMINATIM_VERSION }}-${{ steps.get_commit.outputs.SHORT_SHA }}-serve${{ steps.get_suffix.outputs.TAG_SUFFIX }}
+            ${{ github.event_name == 'push' && format('{0}:v{1}-{2}-serve{3}', steps.repo.outputs.REPO, steps.get_version.outputs.NOMINATIM_VERSION, steps.get_commit.outputs.SHORT_SHA, steps.get_suffix.outputs.TAG_SUFFIX) || '' }}
             ${{ steps.repo.outputs.REPO }}:serve${{ steps.get_suffix.outputs.TAG_SUFFIX }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.created=${{ github.event.head_commit.timestamp }}
+            org.opencontainers.image.created=${{ steps.get_commit.outputs.CREATED }}
             org.opencontainers.image.version=${{ steps.get_version.outputs.NOMINATIM_VERSION }}
 
       - name: Build and push to GitHub Container Registry
@@ -450,12 +464,12 @@ jobs:
           sbom: true
           cache-from: type=gha,scope=full
           tags: |
-            ghcr.io/${{ steps.repo.outputs.REPO }}:v${{ steps.get_version.outputs.NOMINATIM_VERSION }}-${{ steps.get_commit.outputs.SHORT_SHA }}${{ steps.get_suffix.outputs.TAG_SUFFIX }}
+            ${{ github.event_name == 'push' && format('ghcr.io/{0}:v{1}-{2}{3}', steps.repo.outputs.REPO, steps.get_version.outputs.NOMINATIM_VERSION, steps.get_commit.outputs.SHORT_SHA, steps.get_suffix.outputs.TAG_SUFFIX) || '' }}
             ghcr.io/${{ steps.repo.outputs.REPO }}:latest${{ steps.get_suffix.outputs.TAG_SUFFIX }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.created=${{ github.event.head_commit.timestamp }}
+            org.opencontainers.image.created=${{ steps.get_commit.outputs.CREATED }}
             org.opencontainers.image.version=${{ steps.get_version.outputs.NOMINATIM_VERSION }}
 
       - name: Build and push serve image to GitHub Container Registry
@@ -469,10 +483,10 @@ jobs:
           sbom: true
           cache-from: type=gha,scope=serve
           tags: |
-            ghcr.io/${{ steps.repo.outputs.REPO }}:v${{ steps.get_version.outputs.NOMINATIM_VERSION }}-${{ steps.get_commit.outputs.SHORT_SHA }}-serve${{ steps.get_suffix.outputs.TAG_SUFFIX }}
+            ${{ github.event_name == 'push' && format('ghcr.io/{0}:v{1}-{2}-serve{3}', steps.repo.outputs.REPO, steps.get_version.outputs.NOMINATIM_VERSION, steps.get_commit.outputs.SHORT_SHA, steps.get_suffix.outputs.TAG_SUFFIX) || '' }}
             ghcr.io/${{ steps.repo.outputs.REPO }}:serve${{ steps.get_suffix.outputs.TAG_SUFFIX }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.created=${{ github.event.head_commit.timestamp }}
+            org.opencontainers.image.created=${{ steps.get_commit.outputs.CREATED }}
             org.opencontainers.image.version=${{ steps.get_version.outputs.NOMINATIM_VERSION }}

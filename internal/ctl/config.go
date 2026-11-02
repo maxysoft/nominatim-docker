@@ -1,6 +1,7 @@
 package ctl
 
 import (
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"maps"
@@ -34,8 +35,9 @@ var Datasets = []Dataset{
 	{"IMPORT_TIGER_ADDRESSES", "tiger2024-nominatim-preprocessed.csv.tar.gz", "tiger-nominatim-preprocessed.csv.tar.gz", "Tiger addresses"},
 }
 
-// Config is the fully resolved runtime configuration, derived once at startup
-// from the environment; nothing else reads os.Getenv.
+// Config is the runtime configuration, resolved once at startup from the
+// environment. Only Load validates: a variable read with os.Getenv elsewhere
+// must still be checked there.
 type Config struct {
 	ProjectDir string
 	UserAgent  string
@@ -85,8 +87,9 @@ type Config struct {
 	// Serving.
 	GunicornBind    string
 	GunicornWorkers int
-	// GunicornGracefulTimeout is Gunicorn's drain deadline in seconds; the
-	// SIGKILL deadline of every child follows it (ShutdownGrace).
+	// Gunicorn's request and drain deadlines, in seconds. The SIGKILL
+	// deadline of every child follows the drain one (ShutdownGrace).
+	GunicornTimeout         int
 	GunicornGracefulTimeout int
 	WarmupOnStartup         bool
 
@@ -132,8 +135,18 @@ func Load() (*Config, error) {
 		WarmupOnStartup:            envBool("WARMUP_ON_STARTUP"),
 	}
 
+	sums := []string{"PBF_SHA256"}
 	for _, d := range Datasets {
 		c.DatasetValues[d.EnvVar] = os.Getenv(d.EnvVar)
+		sums = append(sums, d.EnvVar+"_SHA256")
+	}
+	// The import reads these itself; verifyChecksum would reject a malformed
+	// one only after the whole download.
+	for _, name := range sums {
+		v := os.Getenv(name)
+		if _, err := hex.DecodeString(v); v != "" && (len(v) != 64 || err != nil) {
+			return nil, fmt.Errorf("%s must be the 64 hex digits of a SHA-256 digest (the first field of sha256sum output), got %q", name, v)
+		}
 	}
 
 	var err error
@@ -162,6 +175,9 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	if c.GunicornWorkers, err = envInt("GUNICORN_WORKERS", cpus); err != nil {
+		return nil, err
+	}
+	if c.GunicornTimeout, err = envInt("GUNICORN_TIMEOUT", 60); err != nil {
 		return nil, err
 	}
 	if c.GunicornGracefulTimeout, err = envInt("GUNICORN_GRACEFUL_TIMEOUT", 30); err != nil {
@@ -228,6 +244,9 @@ func (c *Config) Validate() error {
 	}
 	if c.GunicornWorkers < 1 {
 		return fmt.Errorf("GUNICORN_WORKERS must be >= 1, got %d", c.GunicornWorkers)
+	}
+	if c.GunicornTimeout < 0 {
+		return fmt.Errorf("GUNICORN_TIMEOUT must be >= 0, got %d", c.GunicornTimeout)
 	}
 	if c.GunicornGracefulTimeout < 0 {
 		return fmt.Errorf("GUNICORN_GRACEFUL_TIMEOUT must be >= 0, got %d", c.GunicornGracefulTimeout)
@@ -361,19 +380,12 @@ func envSecret(name string) (string, error) {
 	return os.Getenv(name), nil
 }
 
-// importToolsPresent is HaveImportTools, replaceable in tests.
-var importToolsPresent = HaveImportTools
-
 // RenderEnvFile builds the Nominatim project .env, regenerated in full on
 // every start so the configuration always matches the environment.
 func RenderEnvFile(c *Config) string {
-	// The file is readable by the uid the API runs as. The serve-only image
-	// never imports or replicates, so it gets the read-only web role; the full
-	// image keeps the owning role for `docker exec ... nominatim admin`.
-	dsn := c.DSN("nominatim", c.NominatimPassword)
-	if !importToolsPresent() {
-		dsn = c.DSN(c.WebUser, c.WebUserPassword)
-	}
+	// The file is readable by the uid the API runs as, so it holds only the
+	// read-only web role. Children get the owning role's DSN from their
+	// environment (BaseEnv), which Nominatim prefers over .env.
 	kv := map[string]string{
 		"NOMINATIM_TOKENIZER":                    "icu",
 		"NOMINATIM_REPLICATION_URL":              c.ReplicationURL,
@@ -381,7 +393,7 @@ func RenderEnvFile(c *Config) string {
 		"NOMINATIM_REPLICATION_RECHECK_INTERVAL": fmt.Sprint(c.ReplicationRecheckInterval),
 		"NOMINATIM_IMPORT_STYLE":                 c.ImportStyle,
 		"NOMINATIM_FLATNODE_FILE":                c.FlatnodeFile,
-		"NOMINATIM_DATABASE_DSN":                 dsn,
+		"NOMINATIM_DATABASE_DSN":                 c.DSN(c.WebUser, c.WebUserPassword),
 		"NOMINATIM_DATABASE_WEBUSER":             c.WebUser,
 	}
 	if c.TigerEnabled() {
@@ -421,8 +433,7 @@ func WriteEnvFile(c *Config, uid, gid int) error {
 			return fmt.Errorf("chown %s: %w", path, err)
 		}
 	}
-	content := RenderEnvFile(c)
-	if _, err := f.WriteString(content); err != nil {
+	if _, err := f.WriteString(RenderEnvFile(c)); err != nil {
 		f.Close()
 		return fmt.Errorf("writing %s: %w", path, err)
 	}
@@ -431,34 +442,10 @@ func WriteEnvFile(c *Config, uid, gid int) error {
 	}
 	err = os.Rename(f.Name(), path)
 	if errors.Is(err, syscall.EBUSY) {
-		// .env is itself a bind mount, which cannot be renamed over; a mount
-		// point is not a symlink, so rewrite it in place.
-		err = writeInPlace(path, content, uid, gid)
+		return fmt.Errorf("cannot replace %s: it is bind-mounted. It is generated from the environment on every start and must not be mounted; set environment variables instead", path)
 	}
 	if err != nil {
 		return fmt.Errorf("writing %s: %w", path, err)
 	}
 	return nil
-}
-
-func writeInPlace(path, content string, uid, gid int) error {
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC|syscall.O_NOFOLLOW, 0o600)
-	if err != nil {
-		return err
-	}
-	if err := f.Chmod(0o600); err != nil {
-		f.Close()
-		return err
-	}
-	if os.Geteuid() == 0 {
-		if err := f.Chown(uid, gid); err != nil {
-			f.Close()
-			return err
-		}
-	}
-	if _, err := f.WriteString(content); err != nil {
-		f.Close()
-		return err
-	}
-	return f.Close()
 }

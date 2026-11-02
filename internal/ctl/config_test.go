@@ -1,6 +1,7 @@
 package ctl
 
 import (
+	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -286,6 +287,7 @@ func testConfig() *Config {
 		PostgresSSLMode:            "require",
 		NominatimPassword:          "pw1",
 		WebUser:                    "www-data",
+		WebUserPassword:            "pw2",
 		ImportStyle:                "full",
 		ReplicationUpdateInterval:  86400,
 		ReplicationRecheckInterval: 900,
@@ -306,14 +308,11 @@ func TestRenderEnvFileIsIdempotent(t *testing.T) {
 }
 
 func TestRenderEnvFileTracksConfigChanges(t *testing.T) {
-	// The full image: its .env carries the application role that rotates here.
-	defer func(f func() bool) { importToolsPresent = f }(importToolsPresent)
-	importToolsPresent = func() bool { return true }
 	c := testConfig()
 	before := RenderEnvFile(c)
 
 	c.PostgresHost = "new-db"
-	c.NominatimPassword = "rotated"
+	c.WebUserPassword = "rotated"
 	c.ImportStyle = "admin"
 	after := RenderEnvFile(c)
 
@@ -325,7 +324,7 @@ func TestRenderEnvFileTracksConfigChanges(t *testing.T) {
 			t.Fatalf("rendered file missing %q:\n%s", want, after)
 		}
 	}
-	if strings.Contains(after, "host=db;") || strings.Contains(after, "password=pw1") {
+	if strings.Contains(after, "host=db;") || strings.Contains(after, "password=pw2") {
 		t.Fatalf("stale values survived the re-render:\n%s", after)
 	}
 }
@@ -411,38 +410,71 @@ func TestLibpqURLBracketsIPv6(t *testing.T) {
 	}
 }
 
-// The serve-only image's .env is readable by the API's uid, so it must not
+// .env is readable by the uid the API runs as, in both images, so it must not
 // hold the owning role's password.
-func TestRenderEnvFileServeImageUsesWebRole(t *testing.T) {
+func TestRenderEnvFileUsesWebRole(t *testing.T) {
 	withEnv(t, baseEnv())
 	t.Setenv("NOMINATIM_WEBUSER_PASSWORD", "web-password-1")
 	c, err := Load()
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	defer func(f func() bool) { importToolsPresent = f }(importToolsPresent)
-
-	importToolsPresent = func() bool { return false }
-	if env := RenderEnvFile(c); !strings.Contains(env, "user=www-data;password=web-password-1;") || strings.Contains(env, "user=nominatim;") {
-		t.Fatalf("serve image .env must carry only the web role:\n%s", env)
-	}
-	importToolsPresent = func() bool { return true }
-	if env := RenderEnvFile(c); !strings.Contains(env, "user=nominatim;") {
-		t.Fatalf("full image .env must carry the application role:\n%s", env)
+	if env := RenderEnvFile(c); !strings.Contains(env, "user=www-data;password=web-password-1;") ||
+		strings.Contains(env, "user=nominatim;") || strings.Contains(env, c.NominatimPassword) {
+		t.Fatalf(".env must carry only the web role:\n%s", env)
 	}
 }
 
-// GUNICORN_GRACEFUL_TIMEOUT drives the SIGKILL deadline, so it must be a number.
-func TestGracefulTimeout(t *testing.T) {
+// Both reach Gunicorn's command line: a non-number there killed it after
+// "ready" was logged. The graceful one also drives the SIGKILL deadline.
+func TestGunicornTimeouts(t *testing.T) {
 	withEnv(t, baseEnv())
 	c, err := Load()
-	if err != nil || c.GunicornGracefulTimeout != 30 {
-		t.Fatalf("default = %v, %v; want 30", c, err)
+	if err != nil || c.GunicornTimeout != 60 || c.GunicornGracefulTimeout != 30 {
+		t.Fatalf("defaults = %v, %v; want 60 and 30", c, err)
 	}
-	for _, bad := range []string{"abc", "-1"} {
-		t.Setenv("GUNICORN_GRACEFUL_TIMEOUT", bad)
-		if _, err := Load(); err == nil {
-			t.Errorf("GUNICORN_GRACEFUL_TIMEOUT=%q accepted", bad)
+	for _, v := range []int{120, 0} {
+		t.Setenv("GUNICORN_TIMEOUT", fmt.Sprint(v))
+		if c, err := Load(); err != nil || c.GunicornTimeout != v {
+			t.Fatalf("GUNICORN_TIMEOUT=%d gave %v, %v", v, c, err)
 		}
+	}
+	for _, tc := range []struct{ name, val string }{
+		{"GUNICORN_TIMEOUT", "abc"}, {"GUNICORN_TIMEOUT", "-1"},
+		{"GUNICORN_GRACEFUL_TIMEOUT", "abc"}, {"GUNICORN_GRACEFUL_TIMEOUT", "-1"},
+	} {
+		t.Run(tc.name+"="+tc.val, func(t *testing.T) {
+			t.Setenv(tc.name, tc.val)
+			if _, err := Load(); err == nil {
+				t.Errorf("%s=%q accepted", tc.name, tc.val)
+			}
+		})
+	}
+}
+
+// verifyChecksum matches hex digits in either case and nothing else. A pasted
+// `sha256sum` line used to fail only after the whole download, which the
+// restart policy then repeated forever.
+func TestChecksumMustBeHexDigest(t *testing.T) {
+	sum := strings.Repeat("0a", 32)
+	for _, tc := range []struct {
+		name, val string
+		ok        bool
+	}{
+		{"PBF_SHA256", sum, true},
+		{"PBF_SHA256", strings.ToUpper(sum), true},
+		{"PBF_SHA256", sum + "  planet.osm.pbf", false},
+		{"PBF_SHA256", sum[:62], false},
+		{"PBF_SHA256", "z" + sum[1:], false},
+		{"IMPORT_WIKIPEDIA_SHA256", sum + "  wikimedia-importance.csv.gz", false},
+		{"IMPORT_TIGER_ADDRESSES_SHA256", sum, true},
+	} {
+		t.Run(tc.name+"="+tc.val, func(t *testing.T) {
+			withEnv(t, baseEnv())
+			t.Setenv(tc.name, tc.val)
+			if _, err := Load(); (err == nil) != tc.ok {
+				t.Errorf("%s=%q: err = %v, want accepted = %v", tc.name, tc.val, err, tc.ok)
+			}
+		})
 	}
 }

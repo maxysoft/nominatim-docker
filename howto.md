@@ -50,12 +50,12 @@ Other places at Geofabrik follow the pattern `https://download.geofabrik.de/$CON
 - `IMPORT_TIGER_ADDRESSES`: Whether to download and import the Tiger address data (`true`) or path to a preprocessed Tiger address set in the container. (default: `false`)
 - `DATA_MIRROR_URL`: Base URL the supplementary datasets above are downloaded from over HTTPS (default: `https://nominatim.org/data`).
   Point it at your own mirror to avoid loading the upstream servers (see [#416](https://github.com/mediagis/nominatim-docker/issues/416)).
-- `IMPORT_WIKIPEDIA_SHA256` (and the same suffix on every other `IMPORT_*` switch), `PBF_SHA256`: Optional SHA-256 of the download, verified before it is used. (default: unset)
+- `IMPORT_WIKIPEDIA_SHA256` (and the same suffix on every other `IMPORT_*` switch), `PBF_SHA256`: Optional SHA-256 of the download, verified before it is used. Give only the 64 hex digits (the first field of `sha256sum` output); any other value stops the container at startup. (default: unset)
 - `USER_AGENT`: User-Agent sent with every download. (default: `maxysoft/nominatim-docker:<version>`)
 - `THREADS`: How many threads should be used to import (default: the container's CPU allowance, which is the cgroup CPU quota when one is set and all cores otherwise)
 - `GUNICORN_WORKERS`: Specifies how many Gunicorn worker processes should handle API requests. If not explicitly set, it defaults to the container's CPU allowance (same rule as `THREADS`). Increase this value to improve concurrent request handling capacity, but ensure it aligns with your server's CPU resources. Each worker holds up to `NOMINATIM_API_POOL_SIZE` database connections (5 by default), so keep `GUNICORN_WORKERS` × 5 plus `THREADS` below PostgreSQL's `max_connections`.
 - `GUNICORN_BIND`: Address the API listens on; the healthcheck follows it. (default: `0.0.0.0:8080`)
-- `GUNICORN_TIMEOUT`, `GUNICORN_GRACEFUL_TIMEOUT`: Request and shutdown drain deadlines in seconds. (default: `60`, `30`) Raising the drain deadline also needs the compose `stop_grace_period` (40 s) raised to at least that plus 5 s.
+- `GUNICORN_TIMEOUT`, `GUNICORN_GRACEFUL_TIMEOUT`: Request and shutdown drain deadlines in seconds. (default: `60`, `30`) `GUNICORN_TIMEOUT` must be a whole number; `0` disables Gunicorn's worker timeout. Raising the drain deadline also needs the compose `stop_grace_period` (40 s) raised to at least that plus 5 s.
 - `POSTGRES_HOST`: Hostname or IP of the PostgreSQL server. (default: `postgres`)
 - `POSTGRES_PORT`: Port of the PostgreSQL server. (default: `5432`)
 - `POSTGRES_DB`: Name of the database. (default: `nominatim`)
@@ -69,7 +69,7 @@ Other places at Geofabrik follow the pattern `https://download.geofabrik.de/$CON
 - `NOMINATIM_WEBUSER`: Name of the read-only role the API connects as. (default: `www-data`)
 - `NOMINATIM_ROLE_OPTIONS`: Attributes of the `nominatim` role. Set `SUPERUSER` only if your provider cannot pre-install extensions. (default: `CREATEDB`)
 - `PROVISION_EXTENSIONS`: Install missing PostGIS and hstore extensions into `template1`. Set `false` on a shared cluster and install them yourself. (default: `true`)
-- `ALLOW_DROP_EXISTING_DB`: Let an import drop a database that already holds tables. Prefer the `reimport` subcommand (see [Docker Compose](#docker-compose)). (default: `false`)
+- `ALLOW_DROP_EXISTING_DB`: Let an import drop a database that holds tables but no completion marker and fails `nominatim admin --check-database`; one that passes is adopted, never dropped. Prefer the `reimport` subcommand (see [Docker Compose](#docker-compose)). (default: `false`)
 - `WARMUP_ON_STARTUP`: Whether to warm up the database caches on container startup by loading tables and indices into RAM. This can improve initial query performance, especially on systems with slow disks and sufficient RAM. However, it will increase the container's startup time. Set to `true` to enable. (default: `false`)
 - `DEBUG_MODE`: Enable verbose debug output showing all executed commands during startup and import. Useful for troubleshooting but creates noisy logs. Set to `true` to enable. (default: `false`)
 - `PROJECT_DIR`: Nominatim project directory inside the container; the volume examples below assume the default. (default: `/nominatim`)
@@ -152,11 +152,15 @@ docker exec -it -u nominatim nominatim nominatim replication --help
 
 With the shipped compose files updates run in their own container: `docker compose -f contrib/docker-compose.yml --profile updates up -d` starts `nominatim-updater`, which runs `nominatim-ctl replicate` on the full image: it initialises replication and applies diffs continuously. `UPDATE_MODE=once` or `catch-up` make that container exit when it is done.
 
-For a single full-image container, the following command will keep updating the database forever:
+For a single full-image container, the following command will keep updating the database forever. The project `.env` holds only the API's read-only `www-data` role, so a command that writes to the database needs the `nominatim` role's DSN, built from your `POSTGRES_*` and `NOMINATIM_PASSWORD` values. `nominatim admin --check-database` needs it too: the web role cannot read every table it checks.
 
 ```sh
-docker exec -it -u nominatim nominatim nominatim replication --project-dir /nominatim
+docker exec -it -u nominatim \
+  -e NOMINATIM_DATABASE_DSN='pgsql:host=your_postgres_host;port=5432;user=nominatim;password=very_secure_password;dbname=nominatim;sslmode=prefer' \
+  nominatim nominatim replication --project-dir /nominatim
 ```
+
+`UPDATE_MODE` runs replication inside the container instead. That process then holds the `nominatim` DSN under the same user as the API, so only the split deployment of the [compose files](#docker-compose) keeps the API fully apart from the database owner.
 
 If there are no updates available this process will sleep for 15 minutes and try again.
 

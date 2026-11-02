@@ -1,0 +1,38 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      go:
+        patterns: ["*"]
+
+  # A golang bump needs go.mod's go directive raised by hand; the osv lockfile scan flags the drift.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      docker:
+        patterns: ["*"]
+
+  - package-ecosystem: docker-compose
+    directories: [/contrib, /test]
+    schedule:
+      interval: weekly
+    # Locally built images: not in any registry.
+    ignore:
+      - dependency-name: nominatim
+      - dependency-name: nominatim-itest
+    groups:
+      compose:
+        patterns: ["*"]

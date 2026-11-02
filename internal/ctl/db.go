@@ -119,6 +119,44 @@ func readImportMarker(ctx context.Context, url, dbname string) (bool, error) {
 	return comment != nil && *comment == importMarker, nil
 }
 
+// importLockClass namespaces the import lock among advisory locks;
+// test/integration.sh takes the same lock by value.
+const importLockClass = 1313820489
+
+// lockImport serialises the decide-and-import span for dbname across
+// containers with a session-level advisory lock, waiting while another holds
+// it; unlock releases it. url must reach the maintenance database: advisory
+// locks are per database, and dbname gets dropped. Polled rather than
+// pg_advisory_lock: a cancelled wait would leave the server backend queued.
+// ponytail: the lock lives only as long as this connection, so one that dies
+// mid-import (server restart, idle reaper) frees it early; re-take it before
+// DROP DATABASE if that ever matters.
+func lockImport(ctx context.Context, url, dbname string) (unlock func(), err error) {
+	conn, err := pgx.Connect(ctx, url)
+	if err != nil {
+		return nil, fmt.Errorf("taking the import lock: %w", err)
+	}
+	for i := 0; ; i++ {
+		var got bool
+		if err := conn.QueryRow(ctx, "SELECT pg_try_advisory_lock($1, hashtext($2))", importLockClass, dbname).Scan(&got); err != nil {
+			conn.Close(context.Background())
+			return nil, fmt.Errorf("taking the import lock: %w", err)
+		}
+		if got {
+			return func() { conn.Close(context.Background()) }, nil
+		}
+		if i == 0 {
+			Logf("waiting for another import into %q to finish", dbname)
+		}
+		select {
+		case <-ctx.Done():
+			conn.Close(context.Background())
+			return nil, ctx.Err()
+		case <-time.After(5 * time.Second):
+		}
+	}
+}
+
 // ensureRole creates role if it is absent, and reconciles its password and
 // attributes. A role without our marker comment belongs to someone else, so
 // we stop rather than reset its password.

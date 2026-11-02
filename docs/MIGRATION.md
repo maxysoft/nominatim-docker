@@ -29,7 +29,7 @@ records it as imported, which takes a few minutes on a country extract and longe
 | Import detection | `/nominatim/import-finished` file | a marker comment on the database |
 | `nominatim` role | `SUPERUSER` | `CREATEDB` |
 | API database role | `nominatim` (owner) | `www-data` (read-only), own password |
-| Running commands | `docker exec … sudo -u nominatim nominatim …` | `docker exec -u nominatim … nominatim …` |
+| Running commands | `docker exec … sudo -u nominatim nominatim …` | `docker exec -u nominatim … nominatim …`, plus `-e NOMINATIM_DATABASE_DSN=…` for commands that write |
 | Supplementary data | `scp` from a storage box | HTTPS from `https://nominatim.org/data` |
 
 ## Environment variables
@@ -45,7 +45,7 @@ records it as imported, which takes a few minutes on a country extract and longe
 | `PBF_SHA256`, `IMPORT_WIKIPEDIA_SHA256`, … (`_SHA256` on every `IMPORT_*` switch) | unset | Optional checksum of each download. |
 | `NOMINATIM_ROLE_OPTIONS` | `CREATEDB` | Set `SUPERUSER` only if your provider cannot pre-install extensions. |
 | `PROVISION_EXTENSIONS` | `true` | Installs missing PostGIS/hstore into `template1` before an import. Set `false` on a shared cluster. |
-| `ALLOW_DROP_EXISTING_DB` | `false` | Lets an import drop a database that holds tables. Prefer the `reimport` command. |
+| `ALLOW_DROP_EXISTING_DB` | `false` | Lets an import drop a database that holds tables but no completion marker and fails `nominatim admin --check-database`; one that passes is adopted. Prefer the `reimport` command. |
 | `GUNICORN_BIND`, `GUNICORN_TIMEOUT`, `GUNICORN_GRACEFUL_TIMEOUT` | `0.0.0.0:8080`, `60`, `30` | Raising the drain deadline also needs `stop_grace_period` raised (see compose changes). |
 | `NOMINATIM_PASSWORD_FILE`, `POSTGRES_ADMIN_PASSWORD_FILE`, `NOMINATIM_WEBUSER_PASSWORD_FILE` | unset | Read the password from a file (Docker secrets). |
 | `HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY` | unset | Now honoured by every download and by replication. |
@@ -68,6 +68,12 @@ records it as imported, which takes a few minutes on a country extract and longe
 - **Configuration applies on every start.** master only read `POSTGRES_HOST`,
   `NOMINATIM_PASSWORD`, `IMPORT_STYLE` and `REPLICATION_URL` on the first run; now the project
   `.env` is regenerated from the environment each time, so hand edits to it are lost.
+- **The project `.env` holds the read-only `www-data` DSN**, in both images, because the API's user
+  can read it. Nominatim prefers the environment over `.env`, so a `docker exec` command that writes
+  (`nominatim replication`, `nominatim refresh`, `nominatim add-data`, …), and `nominatim admin
+  --check-database`, whose checks read tables the web role cannot, need the `nominatim` role:
+  `docker exec -u nominatim -e NOMINATIM_DATABASE_DSN='pgsql:host=…;port=5432;user=nominatim;password=…;dbname=nominatim;sslmode=prefer' <container> nominatim …`.
+  `.env` must not be bind-mounted either: the container stops at startup if it is.
 - **`THREADS` and `GUNICORN_WORKERS`** default to the container's CPU allowance (the cgroup quota)
   instead of `nproc`. The compose files now set both explicitly.
 - **`FREEZE`** is ignored when `REPLICATION_URL` is set. A database frozen earlier stays frozen
@@ -138,7 +144,10 @@ names, so an existing project picks up its data. What changed:
   `import-finished` file is no longer read.
 - **Drop guard.** An import never drops a database that holds tables unless you run `reimport` or
   set `ALLOW_DROP_EXISTING_DB=true`. An import interrupted part-way is no longer retried
-  automatically; recover with `reimport`.
+  automatically; recover with `reimport`. Even with `ALLOW_DROP_EXISTING_DB=true`, a database without
+  the marker is validated first and adopted if valid. Imports into one database are serialised across
+  containers by an advisory lock on the `postgres` database; a second container waits, then skips the
+  import if the first finished.
 - **`template1`** receives PostGIS, `postgis_raster` and hstore before a **new** import unless
   `PROVISION_EXTENSIONS=false`. Adopting your existing database does not touch it.
 
@@ -231,7 +240,8 @@ working with these changes:
   it is not needed to serve an existing import;
 - remove `--shm-size`, the `STORAGE_*` variables and `UPDATE_MODE=none`;
 - tag the roles (step 2 above, with `psql` against your server) and chown the volume (step 3);
-- replace `docker exec … sudo -u nominatim nominatim …` with `docker exec -u nominatim … nominatim …`.
+- replace `docker exec … sudo -u nominatim nominatim …` with `docker exec -u nominatim … nominatim …`,
+  adding the `nominatim` role's DSN to commands that write or run `admin --check-database` (see [Changed meaning](#changed-meaning)).
 
 Without `NOMINATIM_WEBUSER_PASSWORD`, the API role keeps sharing `NOMINATIM_PASSWORD`, as on
 master, and the container logs a warning.
@@ -285,5 +295,7 @@ docker compose -f contrib/docker-compose.yml exec nominatim-postgres psql -U pos
 | `role "…" already exists and is not managed by this image` | Tag the role (step 2). |
 | `PostgreSQL rejected the credentials` | `POSTGRES_ADMIN_PASSWORD` is not the cluster's current superuser password, or `NOMINATIM_PASSWORD` differs from the role's password on an untagged role. |
 | API: `password authentication failed for user "www-data"` | The roles are untagged and `NOMINATIM_WEBUSER_PASSWORD` is new. Tag them, or set it to the old `NOMINATIM_PASSWORD`. |
-| `contains an incomplete or invalid Nominatim schema` | `--check-database` failed on the existing database. Run `docker exec -u nominatim <container> nominatim admin --check-database --project-dir /nominatim` to see why; after fixing, start again, or re-import with `reimport`. |
+| `contains an incomplete or invalid Nominatim schema` | `--check-database` failed on the existing database. Run `docker exec -u nominatim -e NOMINATIM_DATABASE_DSN=… <container> nominatim admin --check-database --project-dir /nominatim` (the `nominatim` DSN, see [Changed meaning](#changed-meaning)) to see why; after fixing, start again, or re-import with `reimport`. |
 | `permission denied` under `/nominatim` | Chown the volume (step 3). |
+| `permission denied` or `must be owner of` from a `docker exec … nominatim` command | `.env` carries the read-only role. Pass the `nominatim` DSN with `-e NOMINATIM_DATABASE_DSN=…` (see [Changed meaning](#changed-meaning)). |
+| `cannot replace /nominatim/.env: it is bind-mounted` | Remove the `.env` mount and set the values as environment variables. |
