@@ -68,6 +68,7 @@ ARG NOMINATIM_VERSION
 ARG USER_AGENT
 ARG NOMINATIM_UID
 ARG NOMINATIM_GID
+ARG NOMINATIM_HOME=/var/lib/nominatim
 
 ENV DEBIAN_FRONTEND=noninteractive \
     LANG=C.UTF-8 \
@@ -75,7 +76,6 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
     PATH=/opt/nominatim/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
     PROJECT_DIR=/nominatim \
-    NOMINATIM_HOME=/var/lib/nominatim \
     USER_AGENT=${USER_AGENT}
 
 # hadolint ignore=DL3008  # see docs/REFACTOR.md: base image is digest-pinned; apt floats deliberately

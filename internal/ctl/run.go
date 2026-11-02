@@ -11,10 +11,6 @@ import (
 	"time"
 )
 
-// shutdownGrace is the default time a child may take to exit after SIGTERM
-// before it is killed: Gunicorn's default --graceful-timeout plus a margin.
-const shutdownGrace = 35 * time.Second
-
 // nominatimUser is the unprivileged account created in the Dockerfile.
 const nominatimUser = "nominatim"
 
@@ -25,16 +21,9 @@ type Runner struct {
 	UID, GID int
 	Dir      string
 	Env      []string
-	// Grace overrides shutdownGrace when set (Config.ShutdownGrace).
+	// Grace is how long a child may drain after SIGTERM before it is killed
+	// (Config.ShutdownGrace).
 	Grace time.Duration
-}
-
-// grace is how long a child of r may drain after SIGTERM.
-func (r *Runner) grace() time.Duration {
-	if r.Grace > 0 {
-		return r.Grace
-	}
-	return shutdownGrace
 }
 
 // Command builds a child process that will run as r.UID/r.GID.
@@ -48,7 +37,7 @@ func (r *Runner) Command(ctx context.Context, name string, args ...string) *exec
 	// SIGTERM first so Gunicorn drains and an import is not cut mid-transaction;
 	// WaitDelay escalates to SIGKILL.
 	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
-	cmd.WaitDelay = r.grace()
+	cmd.WaitDelay = r.Grace
 	// Only meaningful, and only permitted, when running as root. The empty
 	// Groups list makes Go call setgroups, so the child does not keep root's
 	// supplementary groups (gid 0, compose group_add).

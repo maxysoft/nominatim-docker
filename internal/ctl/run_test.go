@@ -61,7 +61,4 @@ func TestRunnerGraceFollowsConfig(t *testing.T) {
 	if cmd.WaitDelay != 95*time.Second {
 		t.Fatalf("WaitDelay = %v, want 95s", cmd.WaitDelay)
 	}
-	if got := (&Runner{}).Command(context.Background(), "true").WaitDelay; got != shutdownGrace {
-		t.Fatalf("default WaitDelay = %v, want %v", got, shutdownGrace)
-	}
 }

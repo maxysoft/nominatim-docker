@@ -107,7 +107,8 @@ const (
 )
 
 // Load resolves the configuration from the process environment. It performs no
-// I/O beyond reading *_FILE secret files and stat-ing the flatnode directory.
+// I/O beyond reading *_FILE secret files and stat-ing the flatnode directory
+// and dataset paths.
 func Load() (*Config, error) {
 	c := &Config{
 		ProjectDir:                 envOr("PROJECT_DIR", "/nominatim"),

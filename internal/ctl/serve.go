@@ -248,7 +248,8 @@ func EnsureImported(ctx context.Context, c *Config, r *Runner) error {
 				"to stamp it, run as its owner: COMMENT ON DATABASE %s IS %s",
 				err, QuoteIdentifier(c.PostgresDB), QuoteLiteral(importMarker))
 		}
-		return settled()
+		// Roles were reconciled before validation.
+		return chownProjectFiles(c, r.UID, r.GID)
 	}
 
 	Logf("no completed Nominatim import in %q, running import", c.PostgresDB)
@@ -494,7 +495,7 @@ func runGunicorn(ctx context.Context, c *Config, r *Runner, stopReplication func
 		if replicationDone != nil {
 			select {
 			case <-replicationDone:
-			case <-time.After(r.grace() + time.Second):
+			case <-time.After(r.Grace + time.Second):
 			}
 		}
 	}
